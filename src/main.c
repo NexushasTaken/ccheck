@@ -75,7 +75,6 @@ void check_src_syntax(const char *filepath) {
     AINFO_INDENT(" ", "%s", filepath);
     sec = get_file_mtime(filepath);
     if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
-      sleep(1);
       printf("- done");
     }
     if (sec.tv_sec > ctx.most_recent_mtime.tv_sec) {
