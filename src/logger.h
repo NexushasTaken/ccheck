@@ -3,7 +3,12 @@
 
 #include <stdio.h>
 #include <stdarg.h>
-#define PRINTF_FORMAT(STRING_INDEX, FIRST_TO_CHECK) __attribute__ ((format (printf, STRING_INDEX, FIRST_TO_CHECK)))
+
+#define PRINTF_FORMAT(STRING_INDEX, FIRST_TO_CHECK) \
+  __attribute__ ((format (printf, STRING_INDEX, FIRST_TO_CHECK)))
+
+void AVLOG(FILE *stream, int margin, const char *tag, const char *end, const char *fmt, ...);
+#define AINFO(margin, end, ...) AVLOG(stderr, margin, "INFO", end, __VA_ARGS__)
 
 void VLOG(FILE *stream, const char *tag, const char *fmt, va_list args);
 void INFO(const char *fmt, ...) PRINTF_FORMAT(1, 2);
