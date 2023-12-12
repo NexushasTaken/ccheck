@@ -52,7 +52,7 @@ Cstr get_cwd_with_filename(Cstr filename) {
 
 int cstr_array_indexof_cstr(const Cstr_array *arr, const Cstr str) {
   for (int i = 0; i < ctx.invalid_files.count; i += 1) {
-    if (strncmp(str, ctx.invalid_files.elems[i], strnlen(str, ctx.PATH_LEN_MAX)) == 0) {
+    if (strncmp(str, ctx.invalid_files.elems[i], strlen(str)) == 0) {
       return i;
     }
   }
@@ -60,18 +60,23 @@ int cstr_array_indexof_cstr(const Cstr_array *arr, const Cstr str) {
 }
 
 void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
-  if (new_size >= arr->capacity) {
-    PANIC("capacity %ld must be larger than %ld", new_size, arr->capacity);
+  if (arr->capacity >= new_size) {
+    PANIC("capacity %ld must be larger than %ld", arr->capacity, new_size);
   }
-  Cstr *new_arr = malloc(new_size);
+  Cstr *new_arr = malloc(sizeof(Cstr) * new_size);
   ASSERT_NULL(new_arr, "cannot allocate memory");
-  new_arr = memcpy(new_arr, arr->elems, new_size);
+  if (arr->count > 0) {
+    new_arr = memcpy(new_arr, arr->elems, new_size);
+  }
   free(arr->elems);
   arr->elems = new_arr;
   arr->capacity = new_size;
 }
 
 void cstr_array_remove(Cstr_array *arr, size_t index) {
+  if (index >= arr->count) {
+    PANIC("%ld is index out of bounds", index);
+  }
   free(arr->elems[index]);
   index += 1;
   while (index < arr->count) {
@@ -81,12 +86,11 @@ void cstr_array_remove(Cstr_array *arr, size_t index) {
   arr->count -= 1;
 }
 
-void cstr_array_append(Cstr_array *arr, const Cstr filename) {
+void cstr_array_append(Cstr_array *arr, const Cstr str) {
   if (arr->count >= arr->capacity) {
-    arr->capacity *= 2;
-    cstr_array_realloc(arr, arr->capacity);
+    cstr_array_realloc(arr, arr->capacity ? arr->capacity * 2 : 8);
   }
-  arr->elems[arr->count] = filename;
+  arr->elems[arr->count] = strdup(str);
   arr->count += 1;
 }
 
@@ -201,7 +205,11 @@ void traverse_directory(const Cstr dirpath) {
   CHDIR("..");
 }
 
+#ifdef CCHECK_TEST
+int ccheck_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
   if (argc != 2) {
     PANIC("usage: %s <filename/directory>", argv[0]);
   }
