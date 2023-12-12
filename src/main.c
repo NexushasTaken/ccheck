@@ -13,26 +13,13 @@
 #include <fcntl.h>
 #include "logger.h"
 
-int str_ends_with(const char *cstr, const char *postfix) {
-  const size_t cstr_len = strlen(cstr);
-  const size_t postfix_len = strlen(postfix);
-  return postfix_len <= cstr_len
-    && strcmp(cstr + cstr_len - postfix_len, postfix) == 0;
-}
+typedef char* Cstr;
 
-struct timespec get_file_mtime(const char *filepath) {
-  struct stat statbuf;
-
-  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
-  return statbuf.st_mtim;
-}
-
-mode_t get_file_mode(const char *filepath) {
-  struct stat statbuf;
-
-  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
-  return statbuf.st_mode;
-}
+typedef struct {
+  Cstr *elems;
+  size_t count;
+  size_t capacity;
+} Cstr_array;
 
 typedef struct {
   struct timespec binary_mtime;
@@ -40,9 +27,90 @@ typedef struct {
 
   int level_deep; // used for recursive function
   int indent_width;
+
+  Cstr_array invalid_files; // TODO: init
+  long NAME_LEN_MAX; // TODO: init
+  long PATH_LEN_MAX; // TODO: init
+  Cstr ORIG_DIR; // TODO: init
 } Context;
 
 static Context ctx;
+
+Cstr get_cwd_with_filename(Cstr filename) {
+  filename = strndup(filename, ctx.NAME_LEN_MAX);
+  ASSERT_NULL(filename, "could not duplicate string \"%s\"", filename);
+
+  size_t buffer_size = strlen(ctx.ORIG_DIR) + strlen(filename) + 1;
+  Cstr buffer = malloc(buffer_size);
+  ASSERT_NULL(buffer, "could not allocate memory");
+
+  stpcpy(stpcpy(buffer, ctx.ORIG_DIR), filename);
+
+  free(filename);
+  return buffer;
+}
+
+int cstr_array_indexof_cstr(const Cstr_array *arr, const Cstr str) {
+  for (int i = 0; i < ctx.invalid_files.count; i += 1) {
+    if (strncmp(str, ctx.invalid_files.elems[i], strnlen(str, ctx.PATH_LEN_MAX)) == 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
+  if (new_size >= arr->capacity) {
+    PANIC("capacity %ld must be larger than %ld", new_size, arr->capacity);
+  }
+  Cstr *new_arr = malloc(new_size);
+  ASSERT_NULL(new_arr, "cannot allocate memory");
+  new_arr = memcpy(new_arr, arr->elems, new_size);
+  free(arr->elems);
+  arr->elems = new_arr;
+  arr->capacity = new_size;
+}
+
+void cstr_array_remove(Cstr_array *arr, size_t index) {
+  free(arr->elems[index]);
+  index += 1;
+  while (index < arr->count) {
+    arr->elems[index-1] = arr->elems[index];
+    index += 1;
+  }
+  arr->count -= 1;
+}
+
+void cstr_array_append(Cstr_array *arr, const Cstr filename) {
+  if (arr->count >= arr->capacity) {
+    arr->capacity *= 2;
+    cstr_array_realloc(arr, arr->capacity);
+  }
+  arr->elems[arr->count] = filename;
+  arr->count += 1;
+}
+
+int cstr_ends_with(const Cstr str, const Cstr postfix) {
+  const size_t cstr_len = strlen(str);
+  const size_t postfix_len = strlen(postfix);
+  return postfix_len <= cstr_len
+    && strcmp(str + cstr_len - postfix_len, postfix) == 0;
+}
+
+struct timespec get_file_mtime(const Cstr filepath) {
+  struct stat statbuf;
+
+  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
+  return statbuf.st_mtim;
+}
+
+mode_t get_file_mode(const Cstr filepath) {
+  struct stat statbuf;
+
+  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
+  return statbuf.st_mode;
+}
+
 #define AINFO_INDENT(end, ...) AINFO(ctx.level_deep * ctx.indent_width, end, __VA_ARGS__)
 
 void init(int argc, char **argv) {
@@ -52,7 +120,7 @@ void init(int argc, char **argv) {
   ctx.indent_width = 2;
 }
 
-void set_file_mtime(const char *filepath, const struct timespec mtime) {
+void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
   struct timespec ts[2];
   struct stat statbuf;
   int file_fd;
@@ -67,15 +135,22 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
   ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
 }
 
-void check_src_syntax(const char *filepath) {
+int run_analyzer(const Cstr filepath) {
+  printf("- done");
+  return 0;
+}
+
+void check_src_syntax(const Cstr filepath) {
   struct timespec sec;
 
-  if (str_ends_with(filepath, ".c") ||
-      str_ends_with(filepath, ".h")) {
+  if (cstr_ends_with(filepath, ".c") ||
+      cstr_ends_with(filepath, ".h")) {
     AINFO_INDENT(" ", "%s", filepath);
     sec = get_file_mtime(filepath);
     if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
-      printf("- done");
+      if (run_analyzer(filepath)) {
+        // cstr_array_append(&ctx.invalid_files, get_cwd_with_filename(filepath));
+      }
     }
     if (sec.tv_sec > ctx.most_recent_mtime.tv_sec) {
       ctx.most_recent_mtime = sec;
@@ -92,7 +167,7 @@ void check_src_syntax(const char *filepath) {
     AINFO_INDENT("\n", "=checking %s/", dir);      \
   } while (0) 
 
-void traverse_directory(const char *dirpath) {
+void traverse_directory(const Cstr dirpath) {
   struct dirent *entry_buf;
   mode_t file_mode;
   DIR *parent;
@@ -133,7 +208,7 @@ int main(int argc, char **argv) {
 
   init(argc, argv);
 
-  const char *target = ".";
+  Cstr target = ".";
   target = argv[1];
   if (S_ISDIR(get_file_mode(target))) {
     traverse_directory(target);

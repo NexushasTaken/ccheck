@@ -30,4 +30,11 @@ void PANIC(const char *fmt, ...) PRINTF_FORMAT(1, 2);
     }                        \
   } while (0)
 
+#define PANIC_IF(condition, ...) \
+  do {                        \
+    if ((condition)) {      \
+      PANIC(__VA_ARGS__);     \
+    }                         \
+  } while (0)
+
 #endif // LOGGER_H
