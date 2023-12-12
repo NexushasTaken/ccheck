@@ -86,6 +86,16 @@ void cstr_array_remove(Cstr_array *arr, size_t index) {
   arr->count -= 1;
 }
 
+void cstr_array_free_data(Cstr_array *arr) {
+  if (arr->elems == NULL) {
+    return;
+  }
+  for (int i = 0; i < arr->count; i++) {
+    free(arr->elems[i]);
+  }
+  free(arr->elems);
+}
+
 void cstr_array_append(Cstr_array *arr, const Cstr str) {
   if (arr->count >= arr->capacity) {
     cstr_array_realloc(arr, arr->capacity ? arr->capacity * 2 : 8);
@@ -136,6 +146,10 @@ void init(int argc, char **argv) {
   ctx.ORIG_CWD = malloc(ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(ctx.ORIG_CWD, "could not allocate memory");
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
+}
+
+void cleanup() {
+  cstr_array_free_data(&ctx.invalid_files);
 }
 
 void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
@@ -239,5 +253,6 @@ int main(int argc, char **argv) {
   }
 
   set_file_mtime(argv[0], ctx.most_recent_mtime);
+  cleanup();
   return 0;
 }
