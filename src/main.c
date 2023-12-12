@@ -28,10 +28,10 @@ typedef struct {
   int level_deep; // used for recursive function
   int indent_width;
 
-  Cstr_array invalid_files; // TODO: init
-  long NAME_LEN_MAX; // TODO: init
-  long PATH_LEN_MAX; // TODO: init
-  Cstr ORIG_DIR; // TODO: init
+  Cstr_array invalid_files;
+  long NAME_LEN_MAX;
+  long PATH_LEN_MAX;
+  Cstr ORIG_CWD;
 } Context;
 
 static Context ctx;
@@ -40,11 +40,11 @@ Cstr get_cwd_with_filename(Cstr filename) {
   filename = strndup(filename, ctx.NAME_LEN_MAX);
   ASSERT_NULL(filename, "could not duplicate string \"%s\"", filename);
 
-  size_t buffer_size = strlen(ctx.ORIG_DIR) + strlen(filename) + 1;
+  size_t buffer_size = strlen(ctx.ORIG_CWD) + strlen(filename) + 1;
   Cstr buffer = malloc(buffer_size);
   ASSERT_NULL(buffer, "could not allocate memory");
 
-  stpcpy(stpcpy(buffer, ctx.ORIG_DIR), filename);
+  stpcpy(stpcpy(buffer, ctx.ORIG_CWD), filename);
 
   free(filename);
   return buffer;
@@ -117,11 +117,25 @@ mode_t get_file_mode(const Cstr filepath) {
 
 #define AINFO_INDENT(end, ...) AINFO(ctx.level_deep * ctx.indent_width, end, __VA_ARGS__)
 
+long path_conf(const int name) {
+  long value = pathconf("/", name);
+  ASSERT_ERR(value, "could not get pathconf value for %d", name);
+  return value;
+}
+
 void init(int argc, char **argv) {
   assert(argc > 0);
   ctx.binary_mtime = get_file_mtime(argv[0]);
   ctx.most_recent_mtime = ctx.binary_mtime;
   ctx.indent_width = 2;
+
+  ctx.NAME_LEN_MAX = path_conf(_PC_NAME_MAX);
+  ctx.PATH_LEN_MAX = path_conf(_PC_PATH_MAX);
+
+  ctx.invalid_files = (Cstr_array){0};
+  ctx.ORIG_CWD = malloc(ctx.PATH_LEN_MAX+1);
+  ASSERT_NULL(ctx.ORIG_CWD, "could not allocate memory");
+  ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 }
 
 void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
