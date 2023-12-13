@@ -39,26 +39,30 @@ typedef struct {
 
 static Context ctx;
 
+#define MALLOC(ptr, size)                          \
+  do {                                             \
+    ptr = malloc(size);                            \
+    ASSERT_NULL(ptr, "could not allocate memory"); \
+  } while (0)
+
 Cstr get_cwd_with_filename(Cstr filename) {
-  Cstr cwd, buffer, dup_filename;
+  Cstr cwd, buffer, dup_filename, base_filename;
   size_t buffer_size;
 
-  cwd = malloc(ctx.PATH_LEN_MAX);
-  ASSERT_NULL(cwd, "could not allocate memory");
+  MALLOC(cwd, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(cwd, ctx.PATH_LEN_MAX), "could not get current working directory");
 
   dup_filename = strndup(filename, ctx.NAME_LEN_MAX);
   ASSERT_NULL(dup_filename, "could not duplicate string \"%s\"", filename);
 
-  basename(dup_filename);
-  buffer_size = strlen(cwd) + strlen(dup_filename) + 1;
-  buffer = malloc(buffer_size);
-  ASSERT_NULL(buffer, "could not allocate memory");
+  base_filename = basename(dup_filename);
+  buffer_size = strlen(cwd) + strlen(base_filename) + 1;
+  MALLOC(buffer, buffer_size);
 
   *buffer = 0;
   strcat(buffer, cwd);
   strcat(buffer, "/");
-  strcat(buffer, dup_filename);
+  strcat(buffer, base_filename);
   free(cwd);
   free(dup_filename);
   return buffer;
@@ -77,8 +81,8 @@ void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
   if (arr->capacity >= new_size) {
     PANIC("capacity %ld must be larger than %ld", arr->capacity, new_size);
   }
-  Cstr *new_arr = malloc(sizeof(Cstr) * new_size);
-  ASSERT_NULL(new_arr, "cannot allocate memory");
+  Cstr *new_arr;
+  MALLOC(new_arr, sizeof(Cstr) * new_size);
   if (arr->count > 0) {
     new_arr = memcpy(new_arr, arr->elems, new_size);
   }
@@ -220,8 +224,7 @@ void init(int argc, char **argv) {
   ctx.PATH_LEN_MAX = path_conf(_PC_PATH_MAX);
 
   ctx.invalid_files = (Cstr_array){0};
-  ctx.ORIG_CWD = malloc(ctx.PATH_LEN_MAX+1);
-  ASSERT_NULL(ctx.ORIG_CWD, "could not allocate memory");
+  MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
   if (is_file_dir_exist(".cache/ccheck.db")) {
@@ -230,8 +233,7 @@ void init(int argc, char **argv) {
     ctx.cache_stream = fopen(".cache/ccheck.db", "r+");
     ASSERT_NULL(ctx.cache_stream, "could not open %s", ".cache/ccheck.db");
 
-    buffer = malloc(ctx.PATH_LEN_MAX+1);
-    ASSERT_NULL(buffer, "could not allocate memory");
+    MALLOC(buffer, ctx.PATH_LEN_MAX+1);
 
     while (FILE_get_line(ctx.cache_stream, buffer)) {
       *buffer = 0;
