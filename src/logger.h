@@ -23,11 +23,12 @@ void PANIC(const char *fmt, ...) PRINTF_FORMAT(1, 2);
     }                         \
   } while (0)
 
-#define ASSERT_ERR(var, ...) \
-  do {                       \
-    if ((var) < 0) {        \
-      PANIC(__VA_ARGS__);    \
-    }                        \
+#define ASSERT_ERR(var, ...)               \
+  do {                                     \
+    if ((var) < 0) {                       \
+      INFO(__VA_ARGS__);                   \
+      PANIC("error: %s", strerror(errno)); \
+    }                                      \
   } while (0)
 
 #define PANIC_IF(condition, ...) \

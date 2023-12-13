@@ -32,6 +32,8 @@ typedef struct {
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
   Cstr ORIG_CWD;
+
+  FILE *cache_stream;
 } Context;
 
 static Context ctx;
@@ -111,18 +113,42 @@ int cstr_ends_with(const Cstr str, const Cstr postfix) {
     && strcmp(str + cstr_len - postfix_len, postfix) == 0;
 }
 
-struct timespec get_file_mtime(const Cstr filepath) {
-  struct stat statbuf;
+int is_file_dir_exist(const Cstr filepath) {
+  struct stat buf;
+  int ret;
 
-  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
-  return statbuf.st_mtim;
+  ret = stat(filepath, &buf);
+  if (ret < 0) {
+    if (errno == ENOENT) {
+      return 0;
+    }
+    ASSERT_ERR(ret, "could not stat %s: %s", filepath, strerror(errno));
+  }
+  return 1;
 }
 
 mode_t get_file_mode(const Cstr filepath) {
-  struct stat statbuf;
+  struct stat buf;
 
-  ASSERT_ERR(stat(filepath, &statbuf), "could not stat %s", filepath);
-  return statbuf.st_mode;
+  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  return buf.st_mode;
+}
+
+struct timespec get_file_mtime(const Cstr filepath) {
+  struct stat buf;
+
+  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  return buf.st_mtim;
+}
+
+void mkdir_if_not_exist(const Cstr path) {
+  int ret = mkdir(".cache/", 0755);
+  if (ret < 0) {
+    if (errno == EEXIST && !S_ISDIR(get_file_mode(path))) {
+      PANIC("%s exist but it's not a directory", path);
+    }
+    PANIC("could not create %s directory: %s", path, strerror(errno));
+  }
 }
 
 #define AINFO_INDENT(end, ...) AINFO(ctx.level_deep * ctx.indent_width, end, __VA_ARGS__)
@@ -131,6 +157,37 @@ long path_conf(const int name) {
   long value = pathconf("/", name);
   ASSERT_ERR(value, "could not get pathconf value for %d", name);
   return value;
+}
+
+int FILE_get_line(FILE *file, const Cstr buffer) {
+  if (fscanf(file, "%s", buffer) < 0 && ferror(file) != 0) {
+    PANIC("could not read the FILE stream: %s", strerror(errno));
+  }
+  return 1;
+}
+
+int run_analyzer(const Cstr filepath) {
+  printf("- done");
+  return 0;
+}
+
+void check_src_syntax(const Cstr filepath) {
+  struct timespec sec;
+
+  if (cstr_ends_with(filepath, ".c") ||
+      cstr_ends_with(filepath, ".h")) {
+    AINFO_INDENT(" ", "%s", filepath);
+    sec = get_file_mtime(filepath);
+    if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
+      if (!run_analyzer(filepath)) {
+        // cstr_array_append(&ctx.invalid_files, get_cwd_with_filename(filepath));
+      }
+    }
+    if (sec.tv_sec > ctx.most_recent_mtime.tv_sec) {
+      ctx.most_recent_mtime = sec;
+    }
+    printf("\n");
+  }
 }
 
 void init(int argc, char **argv) {
@@ -146,6 +203,23 @@ void init(int argc, char **argv) {
   ctx.ORIG_CWD = malloc(ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(ctx.ORIG_CWD, "could not allocate memory");
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
+
+  if (is_file_dir_exist(".cache/ccheck.db")) {
+    Cstr buffer;
+
+    ctx.cache_stream = fopen(".cache/ccheck.db", "r+");
+    ASSERT_NULL(ctx.cache_stream, "could not open %s", ".cache/ccheck.db");
+
+    buffer = malloc(ctx.PATH_LEN_MAX+1);
+    ASSERT_NULL(buffer, "could not allocate memory");
+
+    while (FILE_get_line(ctx.cache_stream, buffer)) {
+      *buffer = 0;
+      if (is_file_dir_exist(buffer)) {
+        check_src_syntax(buffer);
+      }
+    }
+  }
 }
 
 void cleanup() {
@@ -165,30 +239,6 @@ void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
 
   ASSERT_ERR(futimens(file_fd, ts), "could not change the timestamp of %s", filepath);
   ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
-}
-
-int run_analyzer(const Cstr filepath) {
-  printf("- done");
-  return 0;
-}
-
-void check_src_syntax(const Cstr filepath) {
-  struct timespec sec;
-
-  if (cstr_ends_with(filepath, ".c") ||
-      cstr_ends_with(filepath, ".h")) {
-    AINFO_INDENT(" ", "%s", filepath);
-    sec = get_file_mtime(filepath);
-    if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
-      if (run_analyzer(filepath)) {
-        // cstr_array_append(&ctx.invalid_files, get_cwd_with_filename(filepath));
-      }
-    }
-    if (sec.tv_sec > ctx.most_recent_mtime.tv_sec) {
-      ctx.most_recent_mtime = sec;
-    }
-    printf("\n");
-  }
 }
 
 #define CHDIR(dir)                                 \
