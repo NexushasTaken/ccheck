@@ -34,7 +34,7 @@ typedef struct {
   long PATH_LEN_MAX;
   Cstr ORIG_CWD;
 
-  FILE *cache_stream;
+  FILE *_cache_stream; // only used for get_cache_stream() and close_cache_stream()
 } Context;
 
 static Context ctx;
@@ -45,26 +45,98 @@ static Context ctx;
     ASSERT_NULL(ptr, "could not allocate memory"); \
   } while (0)
 
-Cstr get_cwd_with_filename(Cstr filename) {
-  Cstr cwd, buffer, dup_filename, base_filename;
-  size_t buffer_size;
+mode_t get_file_mode(const Cstr filepath) {
+  struct stat buf;
 
-  MALLOC(cwd, ctx.PATH_LEN_MAX+1);
+  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  return buf.st_mode;
+}
+
+struct timespec get_file_mtime(const Cstr filepath) {
+  struct stat buf;
+
+  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  return buf.st_mtim;
+}
+
+void mkdir_if_not_exist(const Cstr path) {
+  int ret = mkdir(path, 0755);
+  if (ret < 0) {
+    if (errno == EEXIST) {
+      if (S_ISDIR(get_file_mode(path))) {
+        return;
+      } else {
+        PANIC("%s exist but it's not a directory", path);
+      }
+    }
+    PANIC("could not create %s directory: %s", path, strerror(errno));
+  }
+}
+
+FILE *get_cache_stream() {
+#define CACHE_FILE ".cache/ccheck.db"
+  if (ctx._cache_stream == NULL) {
+    mkdir_if_not_exist(".cache/");
+    int fd = open(CACHE_FILE, O_RDWR|O_CREAT, 0644);
+    if (fd < 0) {
+      if (errno == EEXIST) {
+        fd = open(CACHE_FILE, O_RDWR);
+        ASSERT_ERR(fd, "could not open %s", CACHE_FILE);
+      } else {
+        ASSERT_ERR(fd, "could not create %s", CACHE_FILE);
+      }
+    }
+
+    ctx._cache_stream = fdopen(fd, "r+");
+    ASSERT_NULL(ctx._cache_stream, "could not create a stream for file descriptor %d", fd);
+  }
+  return ctx._cache_stream;
+}
+
+void close_cache_stream() {
+  int fd, i;
+
+  if (ctx._cache_stream == NULL && ctx.invalid_files.count == 0) {
+    return;
+  }
+
+  if (ctx.invalid_files.count > 0) {
+    get_cache_stream();
+  }
+
+  fd = fileno(ctx._cache_stream);
+  ASSERT_ERR(fd, "could not get the file descriptor from stream");
+  ASSERT_ERR(ftruncate(fd, 0), "could not truncate the contents of file descriptor %d", fd);
+  rewind(ctx._cache_stream);
+
+  if (ctx.invalid_files.count > 0) {
+    for (i = 0; i < ctx.invalid_files.count; i += 1) {
+      fprintf(ctx._cache_stream, "%s\n", ctx.invalid_files.elems[i]);
+    }
+    fflush(ctx._cache_stream);
+  }
+
+  fclose(ctx._cache_stream);
+}
+
+Cstr get_filename_relative_path(Cstr filename) {
+  Cstr cwd, buffer;
+
+  MALLOC(cwd, ctx.PATH_LEN_MAX + 1);
+  MALLOC(buffer, ctx.PATH_LEN_MAX + 1);
+
   ASSERT_NULL(getcwd(cwd, ctx.PATH_LEN_MAX), "could not get current working directory");
 
-  dup_filename = strndup(filename, ctx.NAME_LEN_MAX);
-  ASSERT_NULL(dup_filename, "could not duplicate string \"%s\"", filename);
+  strcpy(buffer, "./");
+  size_t orig_len = strnlen(ctx.ORIG_CWD, ctx.PATH_LEN_MAX);
+  if (cwd[orig_len] == '/') {
+    strncat(buffer, cwd + orig_len + 1, ctx.PATH_LEN_MAX);
+  }
 
-  base_filename = basename(dup_filename);
-  buffer_size = strlen(cwd) + strlen(base_filename) + 1;
-  MALLOC(buffer, buffer_size);
-
-  *buffer = 0;
-  strcat(buffer, cwd);
   strcat(buffer, "/");
-  strcat(buffer, base_filename);
+  strcat(buffer, filename);
+
   free(cwd);
-  free(dup_filename);
   return buffer;
 }
 
@@ -108,7 +180,7 @@ void cstr_array_free_data(Cstr_array *arr) {
   if (arr->elems == NULL) {
     return;
   }
-  for (int i = 0; i < arr->count; i++) {
+  for (int i = 0; i < arr->count; i += 1) {
     free(arr->elems[i]);
   }
   free(arr->elems);
@@ -143,34 +215,6 @@ int is_file_dir_exist(const Cstr filepath) {
   return 1;
 }
 
-mode_t get_file_mode(const Cstr filepath) {
-  struct stat buf;
-
-  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
-  return buf.st_mode;
-}
-
-struct timespec get_file_mtime(const Cstr filepath) {
-  struct stat buf;
-
-  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
-  return buf.st_mtim;
-}
-
-void mkdir_if_not_exist(const Cstr path) {
-  int ret = mkdir(".cache/", 0755);
-  if (ret < 0) {
-    if (errno == EEXIST) {
-      if (S_ISDIR(get_file_mode(path))) {
-        return;
-      } else {
-        PANIC("%s exist but it's not a directory", path);
-      }
-    }
-    PANIC("could not create %s directory: %s", path, strerror(errno));
-  }
-}
-
 #define AINFO_INDENT(end, ...) AINFO(ctx.level_deep * ctx.indent_width, end, __VA_ARGS__)
 
 long path_conf(const int name) {
@@ -192,6 +236,18 @@ int run_analyzer(const Cstr filepath) {
   return 1;
 }
 
+void check_src_file(const Cstr filename) {
+  AINFO(0, "", "%s - ", filename);
+  if (run_analyzer(filename) > 0) {
+    fprintf(stderr, "error");
+    cstr_array_append(&ctx.invalid_files, filename);
+  } else {
+    fprintf(stderr, "done");
+  }
+  fprintf(stderr, "\n");
+}
+
+// TODO: rename this function, because it's ambiguous
 void check_src_syntax(const Cstr filepath) {
   struct timespec sec;
 
@@ -202,7 +258,7 @@ void check_src_syntax(const Cstr filepath) {
     if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
       if (run_analyzer(filepath) > 0) {
         fprintf(stderr, "error");
-        cstr_array_append(&ctx.invalid_files, get_cwd_with_filename(filepath));
+        cstr_array_append(&ctx.invalid_files, get_filename_relative_path(filepath));
       }
     } else {
       fprintf(stderr, "done");
@@ -228,45 +284,22 @@ void init(int argc, char **argv) {
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
   if (is_file_dir_exist(".cache/ccheck.db")) {
+    FILE *stream = get_cache_stream();
     Cstr buffer;
 
-    ctx.cache_stream = fopen(".cache/ccheck.db", "r+");
-    ASSERT_NULL(ctx.cache_stream, "could not open %s", ".cache/ccheck.db");
-
     MALLOC(buffer, ctx.PATH_LEN_MAX+1);
-
-    while (FILE_get_line(ctx.cache_stream, buffer)) {
-      *buffer = 0;
+    while (FILE_get_line(stream, buffer)) {
       if (is_file_dir_exist(buffer)) {
-        check_src_syntax(buffer);
+        printf("%s\n", buffer);
+        check_src_file(buffer);
       }
+      *buffer = 0;
     }
   }
 }
 
 void cleanup() {
-  if (ctx.invalid_files.count > 0) {
-    if (ctx.cache_stream == NULL) {
-      mkdir_if_not_exist(".cache/");
-
-      int fd = creat(".cache/ccheck.db", 0644);
-      ASSERT_ERR(fd, "could not create %s", ".cache/ccheck.db");
-
-      ctx.cache_stream = fdopen(fd, "w");
-      ASSERT_NULL(ctx.cache_stream, "could not open %s: %s", ".cache/ccheck.db", strerror(errno));
-    } else {
-      rewind(ctx.cache_stream);
-    }
-    for (int i = 0; i < ctx.invalid_files.count; i++) {
-      fprintf(ctx.cache_stream, "%s\n", ctx.invalid_files.elems[i]);
-    }
-    fflush(ctx.cache_stream);
-  }
-  if (ctx.cache_stream != NULL) {
-    ctx.cache_stream = freopen(".cache/ccheck.db", "w", ctx.cache_stream);
-    ASSERT_NULL(ctx.cache_stream, "could not truncate the %s", ".cache/ccheck.db");
-    ASSERT_ERR(fclose(ctx.cache_stream), "could not close the file stream");
-  }
+  close_cache_stream();
   cstr_array_free_data(&ctx.invalid_files);
 }
 
