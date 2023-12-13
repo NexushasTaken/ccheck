@@ -223,6 +223,16 @@ void init(int argc, char **argv) {
 }
 
 void cleanup() {
+  if (ctx.cache_stream == NULL) {
+    mkdir_if_not_exist(".cache/");
+    ctx.cache_stream = fopen(".cache/ccheck.db", "r+");
+    ASSERT_NULL(ctx.cache_stream, "could not open %s", ".cache/ccheck.db");
+  } else {
+    frewind(ctx.cache_stream);
+  }
+  for (int i = 0; i < ctx.invalid_files.count; i++) {
+    fprintf(ctx.cache_stream, "%s\n", ctx.invalid_files[i]);
+  }
   cstr_array_free_data(&ctx.invalid_files);
 }
 
