@@ -140,13 +140,13 @@ Cstr get_filename_relative_path(Cstr filename) {
   return buffer;
 }
 
-int cstr_array_indexof_cstr(const Cstr_array *arr, const Cstr str) {
+int cstr_array_contains(const Cstr_array *arr, const Cstr str) {
   for (int i = 0; i < ctx.invalid_files.count; i += 1) {
     if (strncmp(str, ctx.invalid_files.elems[i], strlen(str)) == 0) {
-      return i;
+      return 1;
     }
   }
-  return -1;
+  return 0;
 }
 
 void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
@@ -341,7 +341,8 @@ void traverse_directory(const Cstr dirpath) {
 
   while ((entry_buf = readdir(parent)) != NULL) {
     if (strcmp(entry_buf->d_name, ".") == 0 ||
-        strcmp(entry_buf->d_name, "..") == 0) {
+        strcmp(entry_buf->d_name, "..") == 0 ||
+        cstr_array_contains(entry_buf->d_name)) {
       continue;
     }
     file_mode = get_file_mode(entry_buf->d_name);
