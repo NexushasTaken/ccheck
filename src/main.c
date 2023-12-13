@@ -342,7 +342,7 @@ void traverse_directory(const Cstr dirpath) {
   while ((entry_buf = readdir(parent)) != NULL) {
     if (strcmp(entry_buf->d_name, ".") == 0 ||
         strcmp(entry_buf->d_name, "..") == 0 ||
-        cstr_array_contains(entry_buf->d_name)) {
+        cstr_array_contains(&ctx.invalid_files, entry_buf->d_name)) {
       continue;
     }
     file_mode = get_file_mode(entry_buf->d_name);
