@@ -48,6 +48,8 @@ static Context ctx;
     ASSERT_NULL(ptr, "could not allocate memory"); \
   } while (0)
 
+#define is_dir(path) (S_ISDIR(get_file_mode(path)))
+#define is_reg(path) (S_ISREG(get_file_mode(path)))
 mode_t get_file_mode(const Cstr filepath) {
   struct stat buf;
 
@@ -216,37 +218,29 @@ int is_str_region_equal(
   return memcmp(s1_start, s2_start, s1_len) == 0;
 }
 
-int is_dir(const Cstr path) {
-  struct stat buf;
-
-  ASSERT_ERR(stat(path, &buf), "could not stat %s", path);
-  return S_ISDIR(buf.st_mode);
-}
-
-#define REAL_PATH_QUERY(buffer, free_var, path)                       \
+#define REAL_PATH_QUERY(buffer, path)                       \
   do {                                                                        \
     MALLOC(buffer, ctx.PATH_LEN_MAX + 1);                                     \
     *buffer = '\0';                                                           \
     ASSERT_NULL(realpath(path, buffer), "\"%s\": %s", path, strerror(errno)); \
-    free_var = buffer;                                                        \
   } while (0)
 
 // TODO: Is it done?
-Cstr get_relative_dir(const Cstr relative_to, const Cstr path) {
-  Cstr orig_rel;
-  Cstr orig_tar;
+// both parameters must be a absolute path directory
+Cstr get_relative_dir(const Cstr relative_to, const Cstr path_dir) {
+  Cstr rel_save;
+  Cstr tar_save;
   Cstr rel_path;
   Cstr tar_path;
   Cstr relative_path;
 
   PANIC_IF(!is_dir(relative_to), "%s is not a directory", relative_to);
-  PANIC_IF(!is_dir(path), "%s is not a directory", path);
+  PANIC_IF(!is_dir(path_dir), "%s is not a directory", path_dir);
 
-  MALLOC(relative_path, ctx.PATH_LEN_MAX + 1);
-  *relative_path = '\0';
-
-  REAL_PATH_QUERY(rel_path, orig_rel, relative_to);
-  REAL_PATH_QUERY(tar_path, orig_tar, path);
+  REAL_PATH_QUERY(rel_path, relative_to);
+  REAL_PATH_QUERY(tar_path, path_dir);
+  rel_save = rel_path;
+  tar_save = tar_path;
 
   Cstr rel_sep = rel_path;
   Cstr tar_sep = tar_path;
@@ -259,6 +253,9 @@ Cstr get_relative_dir(const Cstr relative_to, const Cstr path) {
     rel_sep = strchrnul(rel_path, '/');
     tar_sep = strchrnul(tar_path, '/');
   } while (is_str_region_equal(rel_path, rel_sep-1, tar_path, tar_sep-1));
+
+  MALLOC(relative_path, ctx.PATH_LEN_MAX + 1);
+  *relative_path = '\0';
 
   if (*rel_path == '\0') {
     strcat(relative_path, ".");
@@ -278,8 +275,8 @@ Cstr get_relative_dir(const Cstr relative_to, const Cstr path) {
     strcat(relative_path, tar_path);
   }
 
-  free(orig_rel);
-  free(orig_tar);
+  free(rel_save);
+  free(tar_save);
   return relative_path;
 }
 
