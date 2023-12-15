@@ -245,15 +245,6 @@ Cstr get_relative_dir(const Cstr relative_to, const Cstr path) {
   MALLOC(relative_path, ctx.PATH_LEN_MAX + 1);
   *relative_path = '\0';
 
-  if (strcmp(relative_to, "/") == 0) {
-    if (strcmp(path, "/") == 0) {
-      return strdup(".");
-    }
-    strcat(relative_path, ".");
-    strcat(relative_path, path);
-    return relative_path;
-  }
-
   REAL_PATH_QUERY(rel_path, orig_rel, relative_to);
   REAL_PATH_QUERY(tar_path, orig_tar, path);
 
