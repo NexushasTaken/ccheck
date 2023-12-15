@@ -233,7 +233,7 @@ Cstr get_relative_path(const Cstr relative_to, const Cstr path) {
   return 0;
 }
 
-// TODO: Is it done?
+// TODO: allow path_dir to be a regular file, relative_to must stay to be directory
 // both parameters must be a absolute path directory
 Cstr get_relative_dir(const Cstr relative_to, const Cstr path_dir) {
   Cstr rel_save;
