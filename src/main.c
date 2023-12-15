@@ -1,4 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 500
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -12,6 +14,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <libgen.h>
+#include <ftw.h>
 #include "logger.h"
 
 typedef char* Cstr;
@@ -201,6 +204,95 @@ int cstr_ends_with(const Cstr str, const Cstr postfix) {
     && strcmp(str + cstr_len - postfix_len, postfix) == 0;
 }
 
+int is_str_region_equal(
+    const Cstr s1_start, const Cstr s1_end,
+    const Cstr s2_start, const Cstr s2_end
+    ) {
+  size_t s1_len = s1_end - s1_start + 1;
+  size_t s2_len = s2_end - s2_start + 1;
+  if (s1_len != s2_len) {
+    return 0;
+  }
+  return memcmp(s1_start, s2_start, s1_len) == 0;
+}
+
+int is_dir(const Cstr path) {
+  struct stat buf;
+
+  ASSERT_ERR(stat(path, &buf), "could not stat %s", path);
+  return S_ISDIR(buf.st_mode);
+}
+
+#define REAL_PATH_QUERY(buffer, free_var, path)                       \
+  do {                                                                        \
+    MALLOC(buffer, ctx.PATH_LEN_MAX + 1);                                     \
+    *buffer = '\0';                                                           \
+    ASSERT_NULL(realpath(path, buffer), "\"%s\": %s", path, strerror(errno)); \
+    free_var = buffer;                                                        \
+  } while (0)
+
+// TODO: Is it done?
+Cstr get_relative_dir(const Cstr relative_to, const Cstr path) {
+  Cstr orig_rel;
+  Cstr orig_tar;
+  Cstr rel_path;
+  Cstr tar_path;
+  Cstr relative_path;
+
+  PANIC_IF(!is_dir(relative_to), "%s is not a directory", relative_to);
+  PANIC_IF(!is_dir(path), "%s is not a directory", path);
+
+  MALLOC(relative_path, ctx.PATH_LEN_MAX + 1);
+  *relative_path = '\0';
+
+  if (strcmp(relative_to, "/") == 0) {
+    if (strcmp(path, "/") == 0) {
+      return strdup(".");
+    }
+    strcat(relative_path, ".");
+    strcat(relative_path, path);
+    return relative_path;
+  }
+
+  REAL_PATH_QUERY(rel_path, orig_rel, relative_to);
+  REAL_PATH_QUERY(tar_path, orig_tar, path);
+
+  Cstr rel_sep = rel_path;
+  Cstr tar_sep = tar_path;
+  do {
+    rel_path = rel_sep + (*rel_sep != '\0');
+    tar_path = tar_sep + (*tar_sep != '\0');
+    if (*rel_path == '\0' || *tar_path == '\0') {
+      break;
+    }
+    rel_sep = strchrnul(rel_path, '/');
+    tar_sep = strchrnul(tar_path, '/');
+  } while (is_str_region_equal(rel_path, rel_sep-1, tar_path, tar_sep-1));
+
+  if (*rel_path == '\0') {
+    strcat(relative_path, ".");
+  } else {
+    Cstr save = rel_path, name;
+    int rest = 0;
+    while ((name = strtok_r(NULL, "/", &save)) != NULL) {
+      if (rest) {
+        strcat(relative_path, "/");
+      }
+      strcat(relative_path, "..");
+      rest = 1;
+    }
+  }
+  if (*tar_path != 0) {
+    strcat(relative_path, "/");
+    strcat(relative_path, tar_path);
+  }
+
+  free(orig_rel);
+  free(orig_tar);
+  return relative_path;
+}
+
+
 int is_file_dir_exist(const Cstr filepath) {
   struct stat buf;
   int ret;
@@ -361,6 +453,20 @@ void traverse_directory(const Cstr dirpath) {
   CHDIR("..");
 }
 
+// int process_entry(
+//     const char *fpath,
+//     const struct stat *sb,
+//     int typeflag,
+//     struct FTW *ftwbuf) {
+//   printf("%s\n", fpath);
+//   return 0;
+// }
+//
+// int walk_tree(const Cstr dirpath) {
+//   nftw(dirpath, process_entry, -1, 0);
+//   return 0;
+// }
+
 #ifdef CCHECK_TEST
 int ccheck_main(int argc, char **argv) {
 #else
@@ -374,6 +480,7 @@ int main(int argc, char **argv) {
 
   Cstr target = ".";
   target = argv[1];
+
   if (S_ISDIR(get_file_mode(target))) {
     traverse_directory(target);
   } else {
