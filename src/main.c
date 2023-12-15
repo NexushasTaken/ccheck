@@ -218,12 +218,20 @@ int is_str_region_equal(
   return memcmp(s1_start, s2_start, s1_len) == 0;
 }
 
-#define REAL_PATH_QUERY(buffer, path)                       \
+#define REAL_PATH(buffer, path)                       \
   do {                                                                        \
     MALLOC(buffer, ctx.PATH_LEN_MAX + 1);                                     \
     *buffer = '\0';                                                           \
     ASSERT_NULL(realpath(path, buffer), "\"%s\": %s", path, strerror(errno)); \
   } while (0)
+
+Cstr get_relative_path(const Cstr relative_to, const Cstr path) {
+  Cstr rel_path;
+  Cstr tar_path;
+
+  PANIC_IF(!is_dir(relative_to), "%s is not a directory", relative_to);
+  return 0;
+}
 
 // TODO: Is it done?
 // both parameters must be a absolute path directory
@@ -237,8 +245,8 @@ Cstr get_relative_dir(const Cstr relative_to, const Cstr path_dir) {
   PANIC_IF(!is_dir(relative_to), "%s is not a directory", relative_to);
   PANIC_IF(!is_dir(path_dir), "%s is not a directory", path_dir);
 
-  REAL_PATH_QUERY(rel_path, relative_to);
-  REAL_PATH_QUERY(tar_path, path_dir);
+  REAL_PATH(rel_path, relative_to);
+  REAL_PATH(tar_path, path_dir);
   rel_save = rel_path;
   tar_save = tar_path;
 
