@@ -367,7 +367,7 @@ void traverse_directory(const Cstr dirpath) {
         strcmp(entry_buf->d_name, "..") == 0) {
       continue;
     }
-    const Cstr *relpath = get_filename_relative_path(entry_buf->d_name);
+    Cstr relpath = get_filename_relative_path(entry_buf->d_name);
     if (cstr_array_contains(&ctx.invalid_files, relpath)) {
       continue;
     }
