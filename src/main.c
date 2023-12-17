@@ -130,7 +130,7 @@ Cstr get_filename_relative_path(Cstr filename) {
   MALLOC(cwd, ctx.PATH_LEN_MAX + 1);
   MALLOC(buffer, ctx.PATH_LEN_MAX + 1);
 
-  ASSERT_NULL(getcwd(cwd, ctx.PATH_LEN_MAX), "could not get current working directory");
+  ASSERT_NULL(getcwd(cwd, ctx.PATH_LEN_MAX + 1), "could not get current working directory");
 
   strcpy(buffer, "./");
   size_t orig_len = strnlen(ctx.ORIG_CWD, ctx.PATH_LEN_MAX);
@@ -314,7 +314,6 @@ void init(int argc, char **argv) {
     MALLOC(buffer, ctx.PATH_LEN_MAX+1);
     while (FILE_get_line(stream, buffer)) {
       if (is_file_dir_exist(buffer)) {
-        printf("%s\n", buffer);
         check_src_file(buffer);
       }
       *buffer = 0;
@@ -365,10 +364,14 @@ void traverse_directory(const Cstr dirpath) {
 
   while ((entry_buf = readdir(parent)) != NULL) {
     if (strcmp(entry_buf->d_name, ".") == 0 ||
-        strcmp(entry_buf->d_name, "..") == 0 ||
-        cstr_array_contains(&ctx.invalid_files, entry_buf->d_name)) {
+        strcmp(entry_buf->d_name, "..") == 0) {
       continue;
     }
+    const Cstr *relpath = get_filename_relative_path(entry_buf->d_name);
+    if (cstr_array_contains(&ctx.invalid_files, relpath)) {
+      continue;
+    }
+    free(relpath);
     file_mode = get_file_mode(entry_buf->d_name);
     if (S_ISDIR(file_mode)) {
       traverse_directory(entry_buf->d_name);
