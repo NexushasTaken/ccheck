@@ -1,10 +1,64 @@
 #include "../src/main.c"
 #include "test.h"
 
+// sudo mkdir /a /1
+// sudo chown $USER:$USER /a /1
+// mkdir -p /a/b/c/d/e
+// mkdir -p /1/2/3/4/5
+// mkdir -p /a/1/2/3/4/5
+// mkdir -p /a/b/1/2/3/4/5
+// mkdir -p /a/b/c/1/2/3/4/5
+// mkdir -p /a/b/c/d/1/2/3/4/5
+// mkdir -p /a/b/c/d/e/1/2/3/4/5
+// ./test.sh relative_path
+// sudo rm -rf /a /1
 static void test_relative_dir(void **state) {
   (void)state;
 #define grp(rel, path) (get_relative_dir(rel, path))
 #define ase(s1, s2)    (assert_string_equal(s1, s2))
+  ase(grp("/a/b/c/d/e", "/"), "../../../../..");
+  ase(grp("/a/b/c/d/e", "/a"), "../../../..");
+  ase(grp("/a/b/c/d/e", "/a/b"), "../../..");
+  ase(grp("/a/b/c/d/e", "/a/b/c"), "../..");
+  ase(grp("/a/b/c/d/e", "/a/b/c/d"), "..");
+  ase(grp("/a/b/c/d/e", "/a/b/c/d/e"), ".");
+
+  ase(grp("/a/b/c/d", "/"), "../../../..");
+  ase(grp("/a/b/c/d", "/a"), "../../..");
+  ase(grp("/a/b/c/d", "/a/b"), "../..");
+  ase(grp("/a/b/c/d", "/a/b/c"), "..");
+  ase(grp("/a/b/c/d", "/a/b/c/d"), ".");
+  ase(grp("/a/b/c/d", "/a/b/c/d/e"), "./e");
+
+  ase(grp("/a/b/c", "/"), "../../..");
+  ase(grp("/a/b/c", "/a"), "../..");
+  ase(grp("/a/b/c", "/a/b"), "..");
+  ase(grp("/a/b/c", "/a/b/c"), ".");
+  ase(grp("/a/b/c", "/a/b/c/d"), "./d");
+  ase(grp("/a/b/c", "/a/b/c/d/e"), "./d/e");
+
+  ase(grp("/a/b", "/"), "../..");
+  ase(grp("/a/b", "/a"), "..");
+  ase(grp("/a/b", "/a/b"), ".");
+  ase(grp("/a/b", "/a/b/c"), "./c");
+  ase(grp("/a/b", "/a/b/c/d"), "./c/d");
+  ase(grp("/a/b", "/a/b/c/d/e"), "./c/d/e");
+
+  ase(grp("/a", "/"), "..");
+  ase(grp("/a", "/a"), ".");
+  ase(grp("/a", "/a/b"), "./b");
+  ase(grp("/a", "/a/b/c"), "./b/c");
+  ase(grp("/a", "/a/b/c/d"), "./b/c/d");
+  ase(grp("/a", "/a/b/c/d/e"), "./b/c/d/e");
+
+  ase(grp("/", "/"), ".");
+  ase(grp("/", "/a"), "./a");
+  ase(grp("/", "/a/b"), "./a/b");
+  ase(grp("/", "/a/b/c"), "./a/b/c");
+  ase(grp("/", "/a/b/c/d"), "./a/b/c/d");
+  ase(grp("/", "/a/b/c/d/e"), "./a/b/c/d/e");
+
+
   ase(grp("/a/b/c/d/e", "/"), "../../../../..");
   ase(grp("/a/b/c/d/e", "/a"), "../../../..");
   ase(grp("/a/b/c/d/e", "/a/b"), "../../..");

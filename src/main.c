@@ -242,11 +242,19 @@ Cstr get_relative_dir(const Cstr relative_to, const Cstr path_dir) {
   Cstr tar_path;
   Cstr relative_path;
 
+#ifdef CCHECK_TEST
+  MALLOC(rel_path, ctx.PATH_LEN_MAX + 1);
+  MALLOC(tar_path, ctx.PATH_LEN_MAX + 1);
+
+  strncpy(relative_to, rel_path, ctx.PATH_LEN_MAX);
+  strncpy(path_dir,    tar_path, ctx.PATH_LEN_MAX);
+#else
   PANIC_IF(!is_dir(relative_to), "%s is not a directory", relative_to);
   PANIC_IF(!is_dir(path_dir), "%s is not a directory", path_dir);
 
   REAL_PATH(rel_path, relative_to);
   REAL_PATH(tar_path, path_dir);
+#endif
   rel_save = rel_path;
   tar_save = tar_path;
 
