@@ -245,14 +245,6 @@ long path_conf(const int name) {
   return value;
 }
 
-int FILE_get_line(FILE *file, char *buffer, size_t bufsz) {
-  int count = fscanf(file, "%s", buffer);
-  if (count < 0 && ferror(file) != 0) {
-    PANIC("could not read the FILE stream: %s", strerror(errno));
-  }
-  return count > 0;
-}
-
 // return status code
 int run_analyzer(const char *filepath) {
   return 1;
@@ -310,7 +302,8 @@ void init(int argc, char **argv) {
     char *buffer;
 
     MALLOC(buffer, ctx.PATH_LEN_MAX+1);
-    while (FILE_get_line(stream, buffer, ctx.PATH_LEN_MAX+1)) {
+    errno = 0; // does errors even occured when fgets are used?
+    while (fgets(buffer, ctx.PATH_LEN_MAX+1, stream) != NULL) {
       if (is_file_dir_exist(buffer)) {
         check_src_file(buffer);
       }
