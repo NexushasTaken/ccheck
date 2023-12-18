@@ -17,10 +17,8 @@
 #include <ftw.h>
 #include "logger.h"
 
-typedef char* Cstr;
-
 typedef struct {
-  Cstr *elems;
+  char **elems;
   size_t count;
   size_t capacity;
 } Cstr_array;
@@ -35,7 +33,7 @@ typedef struct {
   Cstr_array invalid_files;
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
-  Cstr ORIG_CWD;
+  char *ORIG_CWD;
 
   FILE *_cache_stream; // only used for get_cache_stream() and close_cache_stream()
 } Context;
@@ -50,21 +48,21 @@ static Context ctx;
 
 #define is_dir(path) (S_ISDIR(get_file_mode(path)))
 #define is_reg(path) (S_ISREG(get_file_mode(path)))
-mode_t get_file_mode(const Cstr filepath) {
+mode_t get_file_mode(const char *filepath) {
   struct stat buf;
 
   ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
   return buf.st_mode;
 }
 
-struct timespec get_file_mtime(const Cstr filepath) {
+struct timespec get_file_mtime(const char *filepath) {
   struct stat buf;
 
   ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
   return buf.st_mtim;
 }
 
-void mkdir_if_not_exist(const Cstr path) {
+void mkdir_if_not_exist(const char *path) {
   int ret = mkdir(path, 0755);
   if (ret < 0) {
     if (errno == EEXIST) {
@@ -124,8 +122,8 @@ void close_cache_stream() {
   fclose(ctx._cache_stream);
 }
 
-Cstr get_filename_relative_path(Cstr filename) {
-  Cstr cwd, buffer;
+char* get_filename_relative_path(const char *filename) {
+  char *cwd, *buffer;
 
   MALLOC(cwd, ctx.PATH_LEN_MAX + 1);
   MALLOC(buffer, ctx.PATH_LEN_MAX + 1);
@@ -145,7 +143,7 @@ Cstr get_filename_relative_path(Cstr filename) {
   return buffer;
 }
 
-int cstr_array_contains(const Cstr_array *arr, const Cstr str) {
+int cstr_array_contains(const Cstr_array *arr, const char *str) {
   for (int i = 0; i < ctx.invalid_files.count; i += 1) {
     if (strncmp(str, ctx.invalid_files.elems[i], strlen(str)) == 0) {
       return 1;
@@ -158,8 +156,8 @@ void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
   if (arr->capacity >= new_size) {
     PANIC("capacity %ld must be larger than %ld", arr->capacity, new_size);
   }
-  Cstr *new_arr;
-  MALLOC(new_arr, sizeof(Cstr) * new_size);
+  char **new_arr;
+  MALLOC(new_arr, sizeof(char*) * new_size);
   if (arr->count > 0) {
     new_arr = memcpy(new_arr, arr->elems, new_size);
   }
@@ -191,7 +189,7 @@ void cstr_array_free_data(Cstr_array *arr) {
   free(arr->elems);
 }
 
-void cstr_array_append(Cstr_array *arr, const Cstr str) {
+void cstr_array_append(Cstr_array *arr, const char *str) {
   if (arr->count >= arr->capacity) {
     cstr_array_realloc(arr, arr->capacity ? arr->capacity * 2 : 8);
   }
@@ -199,7 +197,7 @@ void cstr_array_append(Cstr_array *arr, const Cstr str) {
   arr->count += 1;
 }
 
-int cstr_ends_with(const Cstr str, const Cstr postfix) {
+int cstr_ends_with(const char *str, const char *postfix) {
   const size_t cstr_len = strlen(str);
   const size_t postfix_len = strlen(postfix);
   return postfix_len <= cstr_len
@@ -207,8 +205,8 @@ int cstr_ends_with(const Cstr str, const Cstr postfix) {
 }
 
 int is_str_region_equal(
-    const Cstr s1_start, const Cstr s1_end,
-    const Cstr s2_start, const Cstr s2_end
+    const char *s1_start, const char *s1_end,
+    const char *s2_start, const char *s2_end
     ) {
   size_t s1_len = s1_end - s1_start + 1;
   size_t s2_len = s2_end - s2_start + 1;
@@ -225,7 +223,7 @@ int is_str_region_equal(
     ASSERT_NULL(realpath(path, buffer), "\"%s\": %s", path, strerror(errno)); \
   } while (0)
 
-int is_file_dir_exist(const Cstr filepath) {
+int is_file_dir_exist(const char *filepath) {
   struct stat buf;
   int ret;
 
@@ -247,7 +245,7 @@ long path_conf(const int name) {
   return value;
 }
 
-int FILE_get_line(FILE *file, const Cstr buffer) {
+int FILE_get_line(FILE *file, char *buffer, size_t bufsz) {
   int count = fscanf(file, "%s", buffer);
   if (count < 0 && ferror(file) != 0) {
     PANIC("could not read the FILE stream: %s", strerror(errno));
@@ -256,11 +254,11 @@ int FILE_get_line(FILE *file, const Cstr buffer) {
 }
 
 // return status code
-int run_analyzer(const Cstr filepath) {
+int run_analyzer(const char *filepath) {
   return 1;
 }
 
-void check_src_file(const Cstr filename) {
+void check_src_file(const char *filename) {
   AINFO(0, "", "%s - ", filename);
   if (run_analyzer(filename) > 0) {
     fprintf(stderr, "error");
@@ -272,7 +270,7 @@ void check_src_file(const Cstr filename) {
 }
 
 // TODO: rename this function, because it's ambiguous
-void check_src_syntax(const Cstr filepath) {
+void check_src_syntax(const char *filepath) {
   struct timespec sec;
 
   if (cstr_ends_with(filepath, ".c") ||
@@ -309,10 +307,10 @@ void init(int argc, char **argv) {
 
   if (is_file_dir_exist(".cache/ccheck.db")) {
     FILE *stream = get_cache_stream();
-    Cstr buffer;
+    char *buffer;
 
     MALLOC(buffer, ctx.PATH_LEN_MAX+1);
-    while (FILE_get_line(stream, buffer)) {
+    while (FILE_get_line(stream, buffer, ctx.PATH_LEN_MAX+1)) {
       if (is_file_dir_exist(buffer)) {
         check_src_file(buffer);
       }
@@ -326,7 +324,7 @@ void cleanup() {
   cstr_array_free_data(&ctx.invalid_files);
 }
 
-void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
+void set_file_mtime(const char *filepath, const struct timespec mtime) {
   struct timespec ts[2];
   struct stat statbuf;
   int file_fd;
@@ -349,7 +347,7 @@ void set_file_mtime(const Cstr filepath, const struct timespec mtime) {
     AINFO_INDENT("\n", "=checking %s/", dir);      \
   } while (0) 
 
-void traverse_directory(const Cstr dirpath) {
+void traverse_directory(const char *dirpath) {
   struct dirent *entry_buf;
   mode_t file_mode;
   DIR *parent;
@@ -367,7 +365,7 @@ void traverse_directory(const Cstr dirpath) {
         strcmp(entry_buf->d_name, "..") == 0) {
       continue;
     }
-    Cstr relpath = get_filename_relative_path(entry_buf->d_name);
+    char *relpath = get_filename_relative_path(entry_buf->d_name);
     if (cstr_array_contains(&ctx.invalid_files, relpath)) {
       continue;
     }
@@ -413,7 +411,7 @@ int main(int argc, char **argv) {
 
   init(argc, argv);
 
-  Cstr target = ".";
+  const char *target = ".";
   target = argv[1];
 
   if (S_ISDIR(get_file_mode(target))) {
