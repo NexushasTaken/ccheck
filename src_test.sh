@@ -1,5 +1,5 @@
 #!/bin/sh
-meson compile -C build || exit
+meson compile ccheck -C build || exit
 dir=src_test
 [[ $1 = "new" ]] && touch $dir/add.c $dir/add.h $dir/greetings.h
 sleep 1

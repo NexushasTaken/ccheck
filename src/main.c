@@ -216,7 +216,7 @@ int is_str_region_equal(
   return memcmp(s1_start, s2_start, s1_len) == 0;
 }
 
-#define REAL_PATH(buffer, path)                       \
+#define REAL_PATH(buffer, path)                                               \
   do {                                                                        \
     MALLOC(buffer, ctx.PATH_LEN_MAX + 1);                                     \
     *buffer = '\0';                                                           \
@@ -297,17 +297,22 @@ void init(int argc, char **argv) {
   MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
-  if (is_file_dir_exist(".cache/ccheck.db")) {
+  if (is_file_dir_exist(CACHE_FILE)) {
     FILE *stream = get_cache_stream();
-    char *buffer;
+    char *line;
 
-    MALLOC(buffer, ctx.PATH_LEN_MAX+1);
+    MALLOC(line, ctx.PATH_LEN_MAX+1);
+    *line = 0;
     errno = 0; // does errors even occured when fgets are used?
-    while (fgets(buffer, ctx.PATH_LEN_MAX+1, stream) != NULL) {
-      if (is_file_dir_exist(buffer)) {
-        check_src_file(buffer);
+    while (fgets(line, ctx.PATH_LEN_MAX+1, stream) != NULL) {
+      size_t linesz = strnlen(line, ctx.PATH_LEN_MAX);
+      if (line[linesz - 1] == '\n') {
+        line[linesz - 1] = '\0';
       }
-      *buffer = 0;
+      if (is_file_dir_exist(line)) {
+        check_src_file(line);
+      }
+      *line = 0;
     }
   }
 }
@@ -340,58 +345,23 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
     AINFO_INDENT("\n", "=checking %s/", dir);      \
   } while (0) 
 
-void traverse_directory(const char *dirpath) {
-  struct dirent *entry_buf;
-  mode_t file_mode;
-  DIR *parent;
-
-  errno = 0;
-  parent = opendir(dirpath);  
-  ASSERT_NULL(parent, "could not open directory %s", dirpath);
-
-  // AINFO_INDENT("checking %s", dirpath);
-  CHDIR(dirpath);
-  ctx.level_deep += 1;
-
-  while ((entry_buf = readdir(parent)) != NULL) {
-    if (strcmp(entry_buf->d_name, ".") == 0 ||
-        strcmp(entry_buf->d_name, "..") == 0) {
-      continue;
-    }
-    char *relpath = get_filename_relative_path(entry_buf->d_name);
-    if (cstr_array_contains(&ctx.invalid_files, relpath)) {
-      continue;
-    }
-    free(relpath);
-    file_mode = get_file_mode(entry_buf->d_name);
-    if (S_ISDIR(file_mode)) {
-      traverse_directory(entry_buf->d_name);
-    } else if (S_ISREG(file_mode)) {
-      check_src_syntax(entry_buf->d_name);
-    }
+int process_entry(
+    const char *fpath,
+    const struct stat *sb,
+    int typeflag,
+    struct FTW *ftwbuf) {
+  if (typeflag != FTW_F || cstr_array_contains(&ctx.invalid_files, fpath)) {
+    return 0;
   }
-
-  if (errno != 0) {
-    PANIC("could not read directory");
-  }
-  closedir(parent);
-  ctx.level_deep -= 1;
-  CHDIR("..");
+  ctx.level_deep = ftwbuf->level;
+  check_src_syntax(fpath);
+  return 0;
 }
 
-// int process_entry(
-//     const char *fpath,
-//     const struct stat *sb,
-//     int typeflag,
-//     struct FTW *ftwbuf) {
-//   printf("%s\n", fpath);
-//   return 0;
-// }
-//
-// int walk_tree(const Cstr dirpath) {
-//   nftw(dirpath, process_entry, -1, 0);
-//   return 0;
-// }
+int walk_tree(const char *dirpath) {
+  nftw(dirpath, process_entry, -1, 0);
+  return 0;
+}
 
 #ifdef CCHECK_TEST
 int ccheck_main(int argc, char **argv) {
@@ -408,7 +378,7 @@ int main(int argc, char **argv) {
   target = argv[1];
 
   if (S_ISDIR(get_file_mode(target))) {
-    traverse_directory(target);
+    walk_tree(target);
   } else {
     PANIC("%s is not a directory", target);
   }
