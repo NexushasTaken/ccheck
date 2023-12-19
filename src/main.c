@@ -211,11 +211,19 @@ int run_analyzer(const char *filepath) {
   return 1;
 }
 
-void check_src_file(const char *filename) {
-  int success = run_analyzer(filename) == 0;
-  printf("%s - %s\n", filename, success ? "done" : "error");
+int is_newer(const struct timespec target, const struct timespec file) {
+  return file.tv_sec > target.tv_sec;
+}
+
+// force check fpath if sb is NULL
+void check_src_file(const char *fpath, const struct stat *sb) {
+  int success = 1;
+  if (sb == NULL || is_newer(ctx.binary_mtime, sb->st_mtim)) {
+    success = run_analyzer(fpath) == 0;
+  }
+  printf("%s - %s\n", fpath, success ? "done" : "error");
   if (!success) {
-    cstr_array_append(&ctx.invalid_files, filename);
+    cstr_array_append(&ctx.invalid_files, fpath);
   }
 }
 
@@ -246,7 +254,7 @@ void init(int argc, char **argv) {
         line[linesz - 1] = '\0';
       }
       if (is_file_dir_exist(line)) {
-        check_src_file(line);
+        check_src_file(line, NULL);
       }
       *line = 0;
     }
@@ -274,10 +282,6 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
   ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
 }
 
-int is_newer(const struct timespec target, const struct timespec file) {
-  return file.tv_sec > target.tv_sec;
-}
-
 int process_entry(
     const char *fpath,
     const struct stat *sb,
@@ -289,9 +293,7 @@ int process_entry(
 
   if (cstr_ends_with(fpath + ftwbuf->base, ".c") ||
       cstr_ends_with(fpath + ftwbuf->base, ".h")) {
-    if (is_newer(ctx.binary_mtime, sb->st_mtim)) {
-      check_src_file(fpath);
-    }
+    check_src_file(fpath, sb);
     if (is_newer(ctx.most_recent_mtime, sb->st_mtim)) {
       ctx.most_recent_mtime = sb->st_mtim;
     }
