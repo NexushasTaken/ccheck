@@ -260,6 +260,7 @@ void init(int argc, char **argv) {
   MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
+#ifndef CCHECK_TEST
   if (is_file_dir_exist(CACHE_FILE)) {
     FILE *stream = get_cache_stream();
     char *line;
@@ -278,6 +279,7 @@ void init(int argc, char **argv) {
       *line = 0;
     }
   }
+#endif
 }
 
 void cleanup() {
@@ -300,14 +302,6 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
   ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
 }
 
-#define CHDIR(dir)                                 \
-  do {                                             \
-    if (chdir(dir) != 0) {                         \
-      PANIC("could not change current directory"); \
-    }                                              \
-    AINFO_INDENT("\n", "=checking %s/", dir);      \
-  } while (0) 
-
 int process_entry(
     const char *fpath,
     const struct stat *sb,
@@ -317,7 +311,24 @@ int process_entry(
     return 0;
   }
   ctx.level_deep = ftwbuf->level;
-  check_src_syntax(fpath);
+
+  if (cstr_ends_with(fpath, ".c") ||
+      cstr_ends_with(fpath, ".h")) {
+    int success = 1;
+    if (sb->st_mtime > ctx.binary_mtime.tv_sec) {
+      success = run_analyzer(fpath) == 0;
+    }
+    if (sb->st_mtime > ctx.most_recent_mtime.tv_sec) {
+      ctx.most_recent_mtime = sb->st_mtim;
+    }
+
+    printf("%s - %s\n", fpath, success ? "done" : "error");
+    if (!success) {
+      char *dup = strdup(fpath);
+      ASSERT_NULL(dup, "could not duplicate string %s", fpath);
+      cstr_array_append(&ctx.invalid_files, dup);
+    }
+  }
   return 0;
 }
 
@@ -331,14 +342,12 @@ int ccheck_main(int argc, char **argv) {
 #else
 int main(int argc, char **argv) {
 #endif
-  if (argc != 2) {
-    PANIC("usage: %s <filename/directory>", argv[0]);
-  }
-
   init(argc, argv);
 
   const char *target = ".";
-  target = argv[1];
+  if (argc == 2) {
+    target = argv[1];
+  }
 
   if (S_ISDIR(get_file_mode(target))) {
     walk_tree(target);
