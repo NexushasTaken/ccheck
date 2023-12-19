@@ -223,28 +223,6 @@ void check_src_file(const char *filename) {
   }
 }
 
-void check_src_syntax(const char *filepath) {
-  struct timespec sec;
-
-  if (cstr_ends_with(filepath, ".c") ||
-      cstr_ends_with(filepath, ".h")) {
-    AINFO_INDENT("", "%s - ", filepath);
-    sec = get_file_mtime(filepath);
-    if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
-      if (run_analyzer(filepath) > 0) {
-        fprintf(stderr, "error");
-        cstr_array_append(&ctx.invalid_files, filepath);
-      }
-    } else {
-      fprintf(stderr, "done");
-    }
-    if (sec.tv_sec > ctx.most_recent_mtime.tv_sec) {
-      ctx.most_recent_mtime = sec;
-    }
-    fprintf(stderr, "\n");
-  }
-}
-
 void init(int argc, char **argv) {
   assert(argc > 0);
   ctx.binary_mtime = get_file_mtime(argv[0]);
