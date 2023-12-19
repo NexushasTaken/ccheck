@@ -168,7 +168,7 @@ void cstr_array_free_data(Cstr_array *arr) {
   free(arr->elems);
 }
 
-void cstr_array_append(Cstr_array *arr, const char *str) {
+void cstr_array_append(Cstr_array *arr, const char *const str) {
   if (arr->count >= arr->capacity) {
     cstr_array_realloc(arr, arr->capacity > 0 ? arr->capacity * 2 : 8);
   }
@@ -213,14 +213,14 @@ int run_analyzer(const char *filepath) {
 }
 
 void check_src_file(const char *filename) {
-  AINFO(0, "", "%s - ", filename);
-  if (run_analyzer(filename) > 0) {
-    fprintf(stderr, "error");
+  int success = run_analyzer(filename) == 0;
+  if (!success) {
     cstr_array_append(&ctx.invalid_files, filename);
-  } else {
-    fprintf(stderr, "done");
   }
-  fprintf(stderr, "\n");
+  printf("%s - %s\n", filename, success ? "done" : "error");
+  if (!success) {
+    cstr_array_append(&ctx.invalid_files, filename);
+  }
 }
 
 void check_src_syntax(const char *filepath) {
@@ -233,9 +233,7 @@ void check_src_syntax(const char *filepath) {
     if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
       if (run_analyzer(filepath) > 0) {
         fprintf(stderr, "error");
-        char *dup = strdup(filepath);
-        ASSERT_NULL(dup, "could not duplicate string %s", filepath);
-        cstr_array_append(&ctx.invalid_files, dup);
+        cstr_array_append(&ctx.invalid_files, filepath);
       }
     } else {
       fprintf(stderr, "done");
@@ -324,9 +322,7 @@ int process_entry(
 
     printf("%s - %s\n", fpath, success ? "done" : "error");
     if (!success) {
-      char *dup = strdup(fpath);
-      ASSERT_NULL(dup, "could not duplicate string %s", fpath);
-      cstr_array_append(&ctx.invalid_files, dup);
+      cstr_array_append(&ctx.invalid_files, fpath);
     }
   }
   return 0;
