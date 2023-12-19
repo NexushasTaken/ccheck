@@ -27,6 +27,7 @@ typedef struct {
   struct timespec binary_mtime;
   struct timespec most_recent_mtime;
 
+  // TODO: not used
   int level_deep; // used for recursive function
   int indent_width;
 
@@ -199,8 +200,6 @@ int is_file_dir_exist(const char *filepath) {
   return 1;
 }
 
-#define AINFO_INDENT(end, ...) AINFO(ctx.level_deep * ctx.indent_width, end, __VA_ARGS__)
-
 long path_conf(const int name) {
   long value = pathconf("/", name);
   ASSERT_ERR(value, "could not get pathconf value for %d", name);
@@ -214,9 +213,6 @@ int run_analyzer(const char *filepath) {
 
 void check_src_file(const char *filename) {
   int success = run_analyzer(filename) == 0;
-  if (!success) {
-    cstr_array_append(&ctx.invalid_files, filename);
-  }
   printf("%s - %s\n", filename, success ? "done" : "error");
   if (!success) {
     cstr_array_append(&ctx.invalid_files, filename);
@@ -278,6 +274,10 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
   ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
 }
 
+int is_newer(const struct timespec target, const struct timespec file) {
+  return file.tv_sec > target.tv_sec;
+}
+
 int process_entry(
     const char *fpath,
     const struct stat *sb,
@@ -286,21 +286,14 @@ int process_entry(
   if (typeflag != FTW_F || cstr_array_contains(&ctx.invalid_files, fpath)) {
     return 0;
   }
-  ctx.level_deep = ftwbuf->level;
 
-  if (cstr_ends_with(fpath, ".c") ||
-      cstr_ends_with(fpath, ".h")) {
-    int success = 1;
-    if (sb->st_mtime > ctx.binary_mtime.tv_sec) {
-      success = run_analyzer(fpath) == 0;
+  if (cstr_ends_with(fpath + ftwbuf->base, ".c") ||
+      cstr_ends_with(fpath + ftwbuf->base, ".h")) {
+    if (is_newer(ctx.binary_mtime, sb->st_mtim)) {
+      check_src_file(fpath);
     }
-    if (sb->st_mtime > ctx.most_recent_mtime.tv_sec) {
+    if (is_newer(ctx.most_recent_mtime, sb->st_mtim)) {
       ctx.most_recent_mtime = sb->st_mtim;
-    }
-
-    printf("%s - %s\n", fpath, success ? "done" : "error");
-    if (!success) {
-      cstr_array_append(&ctx.invalid_files, fpath);
     }
   }
   return 0;
