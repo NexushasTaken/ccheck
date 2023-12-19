@@ -122,27 +122,6 @@ void close_cache_stream() {
   fclose(ctx._cache_stream);
 }
 
-char* get_filename_relative_path(const char *filename) {
-  char *cwd, *buffer;
-
-  MALLOC(cwd, ctx.PATH_LEN_MAX + 1);
-  MALLOC(buffer, ctx.PATH_LEN_MAX + 1);
-
-  ASSERT_NULL(getcwd(cwd, ctx.PATH_LEN_MAX + 1), "could not get current working directory");
-
-  strcpy(buffer, "./");
-  size_t orig_len = strnlen(ctx.ORIG_CWD, ctx.PATH_LEN_MAX);
-  if (cwd[orig_len] == '/') {
-    strncat(buffer, cwd + orig_len + 1, ctx.PATH_LEN_MAX);
-  }
-
-  strcat(buffer, "/");
-  strcat(buffer, filename);
-
-  free(cwd);
-  return buffer;
-}
-
 int cstr_array_contains(const Cstr_array *arr, const char *str) {
   for (int i = 0; i < ctx.invalid_files.count; i += 1) {
     if (strncmp(str, ctx.invalid_files.elems[i], strlen(str)) == 0) {
@@ -191,9 +170,11 @@ void cstr_array_free_data(Cstr_array *arr) {
 
 void cstr_array_append(Cstr_array *arr, const char *str) {
   if (arr->count >= arr->capacity) {
-    cstr_array_realloc(arr, arr->capacity ? arr->capacity * 2 : 8);
+    cstr_array_realloc(arr, arr->capacity > 0 ? arr->capacity * 2 : 8);
   }
-  arr->elems[arr->count] = strdup(str);
+  char *dup = strdup(str);
+  ASSERT_NULL(dup, "could not duplicate string %s", str);
+  arr->elems[arr->count] = dup;
   arr->count += 1;
 }
 
@@ -203,25 +184,6 @@ int cstr_ends_with(const char *str, const char *postfix) {
   return postfix_len <= cstr_len
     && strcmp(str + cstr_len - postfix_len, postfix) == 0;
 }
-
-int is_str_region_equal(
-    const char *s1_start, const char *s1_end,
-    const char *s2_start, const char *s2_end
-    ) {
-  size_t s1_len = s1_end - s1_start + 1;
-  size_t s2_len = s2_end - s2_start + 1;
-  if (s1_len != s2_len) {
-    return 0;
-  }
-  return memcmp(s1_start, s2_start, s1_len) == 0;
-}
-
-#define REAL_PATH(buffer, path)                                               \
-  do {                                                                        \
-    MALLOC(buffer, ctx.PATH_LEN_MAX + 1);                                     \
-    *buffer = '\0';                                                           \
-    ASSERT_NULL(realpath(path, buffer), "\"%s\": %s", path, strerror(errno)); \
-  } while (0)
 
 int is_file_dir_exist(const char *filepath) {
   struct stat buf;
@@ -261,7 +223,6 @@ void check_src_file(const char *filename) {
   fprintf(stderr, "\n");
 }
 
-// TODO: rename this function, because it's ambiguous
 void check_src_syntax(const char *filepath) {
   struct timespec sec;
 
@@ -272,7 +233,9 @@ void check_src_syntax(const char *filepath) {
     if (sec.tv_sec > ctx.binary_mtime.tv_sec) {
       if (run_analyzer(filepath) > 0) {
         fprintf(stderr, "error");
-        cstr_array_append(&ctx.invalid_files, get_filename_relative_path(filepath));
+        char *dup = strdup(filepath);
+        ASSERT_NULL(dup, "could not duplicate string %s", filepath);
+        cstr_array_append(&ctx.invalid_files, dup);
       }
     } else {
       fprintf(stderr, "done");
@@ -359,7 +322,7 @@ int process_entry(
 }
 
 int walk_tree(const char *dirpath) {
-  nftw(dirpath, process_entry, -1, 0);
+  ASSERT_ERR(nftw(dirpath, process_entry, -1, 0), "could not traverse %s directory", dirpath);
   return 0;
 }
 
