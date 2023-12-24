@@ -72,7 +72,9 @@ struct timespec get_file_mtime(const char *filepath) {
 }
 
 void mkdir_if_not_exist(const char *path) {
-  int ret = mkdir(path, 0755);
+  int ret;
+
+  ret = mkdir(path, 0755);
   if (ret < 0) {
     if (errno == EEXIST) {
       if (S_ISDIR(get_file_mode(path))) {
@@ -87,9 +89,11 @@ void mkdir_if_not_exist(const char *path) {
 
 FILE *get_cache_stream() {
 #define CACHE_FILE ".cache/ccheck.db"
+  int fd;
+
   if (ctx._cache_stream == NULL) {
     mkdir_if_not_exist(".cache/");
-    int fd = open(CACHE_FILE, O_RDWR|O_CREAT, 0644);
+    fd = open(CACHE_FILE, O_RDWR|O_CREAT, 0644);
     if (fd < 0) {
       if (errno == EEXIST) {
         fd = open(CACHE_FILE, O_RDWR);
@@ -149,14 +153,13 @@ int cstr_array_contains(const Cstr_array *arr, const char *str) {
 }
 
 void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
+  char **new_arr;
+
   if (arr->capacity >= new_size) {
     PANIC("capacity %ld must be larger than %ld", arr->capacity, new_size);
   }
-  char **new_arr;
   MALLOC(new_arr, sizeof(char*) * new_size);
-  if (arr->count > 0) {
-    new_arr = memcpy(new_arr, arr->elems, sizeof(char*) * new_size);
-  }
+  new_arr = memcpy(new_arr, arr->elems, sizeof(char*) * arr->count);
   free(arr->elems);
   arr->elems = new_arr;
   arr->capacity = new_size;
@@ -176,20 +179,25 @@ void cstr_array_remove(Cstr_array *arr, size_t index) {
 }
 
 void cstr_array_free_data(Cstr_array *arr) {
+  int i;
+
   if (arr->elems == NULL) {
     return;
   }
-  for (int i = 0; i < arr->count; i += 1) {
+  for (i = 0; i < arr->count; i += 1) {
     free(arr->elems[i]);
   }
   free(arr->elems);
+  memset(arr, 0, sizeof(Cstr_array));
 }
 
 void cstr_array_append(Cstr_array *arr, const char *const str) {
+  char *dup;
+
   if (arr->count >= arr->capacity) {
     cstr_array_realloc(arr, arr->capacity > 0 ? arr->capacity * 2 : 8);
   }
-  char *dup = strdup(str);
+  dup = strdup(str);
   ASSERT_NULL(dup, "could not duplicate string %s", str);
   arr->elems[arr->count] = dup;
   arr->count += 1;
@@ -217,7 +225,9 @@ int is_file_dir_exist(const char *filepath) {
 }
 
 long path_conf(const int name) {
-  long value = pathconf("/", name);
+  long value;
+
+  value = pathconf("/", name);
   ASSERT_ERR(value, "could not get pathconf value for %d", name);
   return value;
 }
@@ -233,7 +243,9 @@ int is_newer(const struct timespec target, const struct timespec file) {
 
 // force check fpath if sb is NULL
 void check_src_file(const char *fpath, const struct stat *sb) {
-  int success = 1;
+  int success;
+
+  success = 1;
   if (sb == NULL || is_newer(ctx.binary_mtime, sb->st_mtim)) {
     success = run_analyzer(fpath) == 0;
   }
@@ -255,7 +267,9 @@ static const struct option long_options[] = {
 
 long str_to_long(const char *str) {
   char *last;
-  long value = strtol(str, &last, 10);
+  long value;
+
+  value = strtol(str, &last, 10);
   errno = 0;
   if (*str != '\0' && *last == '\0') {
     return value;
@@ -267,6 +281,7 @@ long str_to_long(const char *str) {
 }
 
 void parse_arguments(int argc, char **argv) {
+  static char *default_target_dirs[] = {"."};
   int state;
   int option_index;
 
@@ -287,20 +302,26 @@ void parse_arguments(int argc, char **argv) {
     }
   }
 
-  ctx.target_dirs_length = argc - optind;
-  if (ctx.target_dirs_length > 0) {
-    // TODO: do some research if modifying the argv is fine
-    ctx.target_dirs = argv + optind;
-  } else {
+  if (optind == argc) {
     // TODO: think of another way to approach this
-    static char *default_target_dirs[] = {"."};
     ctx.target_dirs = default_target_dirs;
     ctx.target_dirs_length = 1;
+  } else {
+    // TODO: do some research if modifying the argv is fine
+    ctx.target_dirs_length = argc - optind;
+    ctx.target_dirs = argv + optind;
   }
 }
 
 void init(int argc, char **argv) {
+  FILE *stream;
+  char *line, *resolved_path;
+  int i;
+  size_t linesz;
+
   assert(argc > 0);
+  memset(&ctx, 0, sizeof(Context)); // just to be sure that ctx data is set to zeros
+
   ctx.binary_mtime = get_file_mtime(argv[0]);
   ctx.most_recent_mtime = ctx.binary_mtime;
   ctx.tab_width = 2;
@@ -310,25 +331,34 @@ void init(int argc, char **argv) {
 
   parse_arguments(argc, argv);
 
-  ctx.invalid_files = (Cstr_array){0};
+  // change target_dirs elements to absolute path
+  for (i = 0; i < ctx.target_dirs_length; i += 1) {
+    MALLOC(resolved_path, ctx.PATH_LEN_MAX + 1);
+
+    if (realpath(ctx.target_dirs[i], resolved_path) == NULL) {
+      if (errno == ENOENT || errno == ENOTDIR) {
+        fprintf(stderr, "\"%s\": %s\n", ctx.target_dirs[i], strerror(ENOENT));
+        exit(EXIT_SUCCESS);
+      }
+      ASSERT_NULL(NULL, "error: %s", strerror(ENOENT));
+    }
+
+    ctx.target_dirs[i] = resolved_path;
+  }
+
+  // remove ORIG_CWD if wasn't tend to be used
   MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
-  ctx.current_dir = NULL;
-  ctx.current_dir_len = 0;
-
-  memset(&ctx.valid_files, 0, sizeof(Cstr_array));
-  memset(&ctx.invalid_files, 0, sizeof(Cstr_array));
 #ifndef CCHECK_TEST
   if (is_file_dir_exist(CACHE_FILE)) {
-    FILE *stream = get_cache_stream();
-    char *line;
+    stream = get_cache_stream();
 
     MALLOC(line, ctx.PATH_LEN_MAX+1);
     *line = 0;
     errno = 0; // does errors even occured when fgets are used?
     while (fgets(line, ctx.PATH_LEN_MAX+1, stream) != NULL) {
-      size_t linesz = strnlen(line, ctx.PATH_LEN_MAX);
+      linesz = strnlen(line, ctx.PATH_LEN_MAX);
       if (line[linesz - 1] == '\n') {
         line[linesz - 1] = '\0';
       }
@@ -337,17 +367,20 @@ void init(int argc, char **argv) {
       }
       *line = 0;
     }
+    free(line);
   }
 #endif
 }
 
 void cleanup() {
+  int i;
   close_cache_stream();
   cstr_array_free_data(&ctx.invalid_files);
   cstr_array_free_data(&ctx.valid_files);
-  for (int i = 0; i < ctx.target_dirs_length; i++) {
+  for (i = 0; i < ctx.target_dirs_length; i += 1) {
     free(ctx.target_dirs[i]);
   }
+  free(ctx.ORIG_CWD);
 }
 
 void set_file_mtime(const char *filepath, const struct timespec mtime) {
@@ -402,25 +435,11 @@ int ccheck_main(int argc, char **argv) {
 #else
 int main(int argc, char **argv) {
 #endif
+  int i;
+
   init(argc, argv);
 
-  // change target_dirs elements to absolute path
-  for (int i = 0; i < ctx.target_dirs_length; i++) {
-    char *resolved_path;
-    MALLOC(resolved_path, ctx.PATH_LEN_MAX + 1);
-
-    if (realpath(ctx.target_dirs[i], resolved_path) == NULL) {
-      if (errno == ENOENT || errno == ENOTDIR) {
-        fprintf(stderr, "\"%s\": %s\n", ctx.target_dirs[i], strerror(ENOENT));
-        exit(EXIT_SUCCESS);
-      }
-      ASSERT_NULL(NULL, "error: %s", strerror(ENOENT));
-    }
-
-    ctx.target_dirs[i] = resolved_path;
-  }
-
-  for (int i = 0; i < ctx.target_dirs_length; i++) {
+  for (i = 0; i < ctx.target_dirs_length; i += 1) {
     walk_tree(ctx.target_dirs[i]);
   }
 
