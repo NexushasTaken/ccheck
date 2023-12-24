@@ -31,6 +31,7 @@ typedef struct {
   int tab_width;
   int verbose;
 
+  Cstr_array valid_files;
   Cstr_array invalid_files;
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
@@ -38,6 +39,10 @@ typedef struct {
 
   char **target_dirs;
   int target_dirs_length;
+
+  // used by walk_tree()
+  char *current_dir;
+  size_t current_dir_len;
 
   FILE *_cache_stream; // only used for get_cache_stream() and close_cache_stream()
 } Context;
@@ -126,9 +131,17 @@ void close_cache_stream() {
   fclose(ctx._cache_stream);
 }
 
+char* cstr_array_pop(Cstr_array *arr) {
+  if (arr->count == 0) {
+    PANIC("could not pop: array is empty");
+  }
+  arr->count -= 1;
+  return arr->elems[arr->count];
+}
+
 int cstr_array_contains(const Cstr_array *arr, const char *str) {
-  for (int i = 0; i < ctx.invalid_files.count; i += 1) {
-    if (strncmp(str, ctx.invalid_files.elems[i], strlen(str)) == 0) {
+  for (int i = 0; i < arr->count; i += 1) {
+    if (strncmp(str, arr->elems[i], strlen(str)) == 0) {
       return 1;
     }
   }
@@ -142,7 +155,7 @@ void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
   char **new_arr;
   MALLOC(new_arr, sizeof(char*) * new_size);
   if (arr->count > 0) {
-    new_arr = memcpy(new_arr, arr->elems, new_size);
+    new_arr = memcpy(new_arr, arr->elems, sizeof(char*) * new_size);
   }
   free(arr->elems);
   arr->elems = new_arr;
@@ -224,8 +237,12 @@ void check_src_file(const char *fpath, const struct stat *sb) {
   if (sb == NULL || is_newer(ctx.binary_mtime, sb->st_mtim)) {
     success = run_analyzer(fpath) == 0;
   }
-  printf("%s - %s\n", fpath, success ? "done" : "error");
-  if (!success) {
+  printf("%s - %s\n",
+      fpath + (ctx.current_dir_len ? ctx.current_dir_len + 1 : 0),
+      success ? "done" : "error");
+  if (success) {
+    cstr_array_append(&ctx.valid_files, fpath);
+  } else {
     cstr_array_append(&ctx.invalid_files, fpath);
   }
 }
@@ -272,9 +289,13 @@ void parse_arguments(int argc, char **argv) {
 
   ctx.target_dirs_length = argc - optind;
   if (ctx.target_dirs_length > 0) {
+    // TODO: do some research if modifying the argv is fine
     ctx.target_dirs = argv + optind;
   } else {
-    ctx.target_dirs = (char*[]){"."};
+    // TODO: think of another way to approach this
+    static char *default_target_dirs[] = {"."};
+    ctx.target_dirs = default_target_dirs;
+    ctx.target_dirs_length = 1;
   }
 }
 
@@ -287,12 +308,17 @@ void init(int argc, char **argv) {
   ctx.NAME_LEN_MAX = path_conf(_PC_NAME_MAX);
   ctx.PATH_LEN_MAX = path_conf(_PC_PATH_MAX);
 
-  // parse_arguments(argc, argv);
+  parse_arguments(argc, argv);
 
   ctx.invalid_files = (Cstr_array){0};
   MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
   ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
+  ctx.current_dir = NULL;
+  ctx.current_dir_len = 0;
+
+  memset(&ctx.valid_files, 0, sizeof(Cstr_array));
+  memset(&ctx.invalid_files, 0, sizeof(Cstr_array));
 #ifndef CCHECK_TEST
   if (is_file_dir_exist(CACHE_FILE)) {
     FILE *stream = get_cache_stream();
@@ -318,6 +344,10 @@ void init(int argc, char **argv) {
 void cleanup() {
   close_cache_stream();
   cstr_array_free_data(&ctx.invalid_files);
+  cstr_array_free_data(&ctx.valid_files);
+  for (int i = 0; i < ctx.target_dirs_length; i++) {
+    free(ctx.target_dirs[i]);
+  }
 }
 
 void set_file_mtime(const char *filepath, const struct timespec mtime) {
@@ -340,13 +370,16 @@ int process_entry(
     const struct stat *sb,
     int typeflag,
     struct FTW *ftwbuf) {
-  // TODO: skip if fpath that exist in CACHE_FILE without syntax error
-  if (typeflag != FTW_F || cstr_array_contains(&ctx.invalid_files, fpath)) {
+  if (typeflag != FTW_F) {
     return 0;
   }
 
   if (cstr_ends_with(fpath + ftwbuf->base, ".c") ||
       cstr_ends_with(fpath + ftwbuf->base, ".h")) {
+    if (cstr_array_contains(&ctx.invalid_files, fpath) ||
+      cstr_array_contains(&ctx.valid_files,   fpath)) {
+      return 0;
+    }
     check_src_file(fpath, sb);
     if (is_newer(ctx.most_recent_mtime, sb->st_mtim)) {
       ctx.most_recent_mtime = sb->st_mtim;
@@ -355,7 +388,11 @@ int process_entry(
   return 0;
 }
 
-int walk_tree(const char *dirpath) {
+int walk_tree(char *dirpath) {
+  ctx.current_dir = dirpath;
+  ctx.current_dir_len = strnlen(dirpath, ctx.PATH_LEN_MAX);
+
+  printf("%s:\n", dirpath);
   ASSERT_ERR(nftw(dirpath, process_entry, -1, 0), "could not traverse %s directory", dirpath);
   return 0;
 }
@@ -367,15 +404,24 @@ int main(int argc, char **argv) {
 #endif
   init(argc, argv);
 
-  const char *target = ".";
-  if (argc == 2) {
-    target = argv[1];
+  // change target_dirs elements to absolute path
+  for (int i = 0; i < ctx.target_dirs_length; i++) {
+    char *resolved_path;
+    MALLOC(resolved_path, ctx.PATH_LEN_MAX + 1);
+
+    if (realpath(ctx.target_dirs[i], resolved_path) == NULL) {
+      if (errno == ENOENT || errno == ENOTDIR) {
+        fprintf(stderr, "\"%s\": %s\n", ctx.target_dirs[i], strerror(ENOENT));
+        exit(EXIT_SUCCESS);
+      }
+      ASSERT_NULL(NULL, "error: %s", strerror(ENOENT));
+    }
+
+    ctx.target_dirs[i] = resolved_path;
   }
 
-  if (S_ISDIR(get_file_mode(target))) {
-    walk_tree(target);
-  } else {
-    PANIC("%s is not a directory", target);
+  for (int i = 0; i < ctx.target_dirs_length; i++) {
+    walk_tree(ctx.target_dirs[i]);
   }
 
   set_file_mtime(argv[0], ctx.most_recent_mtime);
