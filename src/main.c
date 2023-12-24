@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <ftw.h>
+#include <getopt.h>
 #include "logger.h"
 
 typedef struct {
@@ -27,14 +28,16 @@ typedef struct {
   struct timespec binary_mtime;
   struct timespec most_recent_mtime;
 
-  // TODO: not used
-  int level_deep; // used for recursive function
-  int indent_width;
+  int tab_width;
+  int verbose;
 
   Cstr_array invalid_files;
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
   char *ORIG_CWD;
+
+  char **target_dirs;
+  int target_dirs_length;
 
   FILE *_cache_stream; // only used for get_cache_stream() and close_cache_stream()
 } Context;
@@ -227,14 +230,64 @@ void check_src_file(const char *fpath, const struct stat *sb) {
   }
 }
 
+static const struct option long_options[] = {
+  {"tabwidth", required_argument, 0, 'w'},
+  {"verbose",  no_argument      , 0, 'v'},
+  {0, 0, 0, 0}
+};
+
+long str_to_long(const char *str) {
+  char *last;
+  long value = strtol(str, &last, 10);
+  errno = 0;
+  if (*str != '\0' && *last == '\0') {
+    return value;
+  } else {
+    fprintf(stderr, "the %s value is not a valid number\n", str);
+    exit(EXIT_FAILURE);
+  }
+  return 0;
+}
+
+void parse_arguments(int argc, char **argv) {
+  int state;
+  int option_index;
+
+  state = 0;
+  option_index = 0;
+  while (state != -1) {
+    state = getopt_long(argc, argv, "w:v", long_options, &option_index);
+    switch (state) {
+      case 'w':
+        ctx.tab_width = str_to_long(optarg);
+        break;
+      case 'v':
+        ctx.verbose = 1;
+        break;
+      case '?':
+        exit(EXIT_FAILURE);
+        break;
+    }
+  }
+
+  ctx.target_dirs_length = argc - optind;
+  if (ctx.target_dirs_length > 0) {
+    ctx.target_dirs = argv + optind;
+  } else {
+    ctx.target_dirs = (char*[]){"."};
+  }
+}
+
 void init(int argc, char **argv) {
   assert(argc > 0);
   ctx.binary_mtime = get_file_mtime(argv[0]);
   ctx.most_recent_mtime = ctx.binary_mtime;
-  ctx.indent_width = 2;
+  ctx.tab_width = 2;
 
   ctx.NAME_LEN_MAX = path_conf(_PC_NAME_MAX);
   ctx.PATH_LEN_MAX = path_conf(_PC_PATH_MAX);
+
+  // parse_arguments(argc, argv);
 
   ctx.invalid_files = (Cstr_array){0};
   MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
@@ -287,6 +340,7 @@ int process_entry(
     const struct stat *sb,
     int typeflag,
     struct FTW *ftwbuf) {
+  // TODO: skip if fpath that exist in CACHE_FILE without syntax error
   if (typeflag != FTW_F || cstr_array_contains(&ctx.invalid_files, fpath)) {
     return 0;
   }
