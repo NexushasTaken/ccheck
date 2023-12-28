@@ -224,13 +224,17 @@ int is_file_dir_exist(const char *filepath) {
   return 1;
 }
 
-long path_conf(const int name) {
-  long value;
+#define path_conf(var, name)                                      \
+  do {                                                            \
+    var = pathconf("/", name);                                    \
+    ASSERT_ERR(var, "could not get pathconf value for %d", name); \
+  } while (1);
 
-  value = pathconf("/", name);
-  ASSERT_ERR(value, "could not get pathconf value for %d", name);
-  return value;
-}
+#define sys_conf(var, name)                                      \
+  do {                                                           \
+    var = sysconf(name);                                         \
+    ASSERT_ERR(var, "could not get sysconf value for %d", name); \
+  } while (1);
 
 // return status code
 int run_analyzer(const char *filepath) {
@@ -326,8 +330,8 @@ void init(int argc, char **argv) {
   ctx.most_recent_mtime = ctx.binary_mtime;
   ctx.tab_width = 2;
 
-  ctx.NAME_LEN_MAX = path_conf(_PC_NAME_MAX);
-  ctx.PATH_LEN_MAX = path_conf(_PC_PATH_MAX);
+  path_conf(ctx.NAME_LEN_MAX, _PC_NAME_MAX);
+  path_conf(ctx.PATH_LEN_MAX, _PC_PATH_MAX);
 
   parse_arguments(argc, argv);
 
