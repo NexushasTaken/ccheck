@@ -325,56 +325,6 @@ void parse_arguments(int argc, char **argv) {
   }
 }
 
-void init(int argc, char **argv) {
-  FILE *stream;
-  char *line, *resolved_path;
-  int i;
-  size_t linesz;
-
-  memset(&ctx, 0, sizeof(Context)); // just to be sure that ctx data is set to zeros
-
-  assert(argc > 0);
-  ctx.binary_mtime = get_file_mtime(argv[0]);
-  ctx.most_recent_mtime = ctx.binary_mtime;
-  ctx.tab_width = 2;
-
-  path_conf(ctx.NAME_LEN_MAX, _PC_NAME_MAX);
-  path_conf(ctx.PATH_LEN_MAX, _PC_PATH_MAX);
-
-  parse_arguments(argc, argv);
-
-  // change target_dirs elements to absolute path
-  for (i = 0; i < ctx.target_dirs_length; i += 1) {
-    resolved_path = cmalloc(ctx.PATH_LEN_MAX + 1);
-
-    ERROR_NO(realpath(ctx.target_dirs[i], resolved_path) == NULL,
-             "realpath(%s)", ctx.target_dirs[i]);
-
-    ctx.target_dirs[i] = resolved_path;
-  }
-
-#ifndef CCHECK_TEST
-  if (is_file_dir_exist(CACHE_FILE)) {
-    stream = get_cache_stream();
-
-    line = cmalloc(ctx.PATH_LEN_MAX + 1);
-    *line = 0;
-    errno = 0; // TODO: does errors even occured when fgets are used?
-    while (fgets(line, ctx.PATH_LEN_MAX+1, stream) != NULL) {
-      linesz = strnlen(line, ctx.PATH_LEN_MAX);
-      if (line[linesz - 1] == '\n') {
-        line[linesz - 1] = '\0';
-      }
-      if (is_file_dir_exist(line)) {
-        check_src_file(line, NULL);
-      }
-      *line = 0;
-    }
-    free(line);
-  }
-#endif
-}
-
 void cleanup() {
   int i;
   close_cache_stream();
@@ -437,9 +387,53 @@ int ccheck_main(int argc, char **argv) {
 #else
 int main(int argc, char **argv) {
 #endif
+  FILE *stream;
+  char *line, *resolved_path;
   int i;
+  size_t linesz;
 
-  init(argc, argv);
+  memset(&ctx, 0, sizeof(Context)); // just to be sure that ctx data is set to zeros
+
+  assert(argc > 0);
+  ctx.binary_mtime = get_file_mtime(argv[0]);
+  ctx.most_recent_mtime = ctx.binary_mtime;
+  ctx.tab_width = 2;
+
+  path_conf(ctx.NAME_LEN_MAX, _PC_NAME_MAX);
+  path_conf(ctx.PATH_LEN_MAX, _PC_PATH_MAX);
+
+  parse_arguments(argc, argv);
+
+  // change target_dirs elements to absolute path
+  for (i = 0; i < ctx.target_dirs_length; i += 1) {
+    resolved_path = cmalloc(ctx.PATH_LEN_MAX + 1);
+
+    ERROR_NO(realpath(ctx.target_dirs[i], resolved_path) == NULL,
+             "realpath(%s)", ctx.target_dirs[i]);
+
+    ctx.target_dirs[i] = resolved_path;
+  }
+
+#ifndef CCHECK_TEST
+  if (is_file_dir_exist(CACHE_FILE)) {
+    stream = get_cache_stream();
+
+    line = cmalloc(ctx.PATH_LEN_MAX + 1);
+    *line = 0;
+    errno = 0; // TODO: does errors even occured when fgets are used?
+    while (fgets(line, ctx.PATH_LEN_MAX+1, stream) != NULL) {
+      linesz = strnlen(line, ctx.PATH_LEN_MAX);
+      if (line[linesz - 1] == '\n') {
+        line[linesz - 1] = '\0';
+      }
+      if (is_file_dir_exist(line)) {
+        check_src_file(line, NULL);
+      }
+      *line = 0;
+    }
+    free(line);
+  }
+#endif
 
   for (i = 0; i < ctx.target_dirs_length; i += 1) {
     walk_tree(ctx.target_dirs[i]);
