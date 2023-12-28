@@ -36,8 +36,8 @@ typedef struct {
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
 
-  char **target_dirs;
-  int target_dirs_length;
+  // becarefull using cstr_array_*() function in this member
+  Cstr_array target_dirs;
 
   // used by walk_tree()
   char *current_dir;
@@ -50,18 +50,18 @@ static Context ctx;
 
 #define error_line(status, errnum, ...) \
   error_at_line(status, errnum, __FILE__, __LINE__, __VA_ARGS__)
-#define ERROR_NO(condition, ...)                  \
+#define ERROR_NO(condition, ...)               \
   do {                                         \
     if ((condition)) {                         \
       error(EXIT_FAILURE, errno, __VA_ARGS__); \
     }                                          \
   } while (0)
 
-#define ERROR_NO_LINE(condition, ...)          \
-  do {                                         \
-    if ((condition)) {                         \
+#define ERROR_NO_LINE(condition, ...)               \
+  do {                                              \
+    if ((condition)) {                              \
       error_line(EXIT_FAILURE, errno, __VA_ARGS__); \
-    }                                          \
+    }                                               \
   } while (0)
 
 #define path_conf(var, name)                      \
@@ -155,6 +155,28 @@ void close_cache_stream() {
   }
 
   ERROR_NO_LINE(fclose(ctx._cache_stream) == EOF, "fclose");
+}
+
+#define cstr_array_loop(arr, name, body) \
+  for (int name##_i = 0; name##_i < (arr)->count; name##_i++) {\
+    char *name = *((arr)->elems + name##_i);  (void)name;\
+    char **name##_p = (arr)->elems + name##_i;(void)name##_p;\
+    body\
+  }
+
+void cstr_array_from(Cstr_array *arr, char **data, size_t len) {
+  arr->elems = data;
+  arr->count = len;
+  arr->capacity = len;
+}
+
+static int
+cmpstringp(const void *p1, const void *p2) {
+  return strcmp(*(const char **) p1, *(const char **) p2);
+}
+
+void cstr_array_sort(Cstr_array *arr) {
+  qsort(arr->elems, arr->count, sizeof(char*), cmpstringp);
 }
 
 char* cstr_array_pop(Cstr_array *arr) {
@@ -316,23 +338,20 @@ void parse_arguments(int argc, char **argv) {
 
   if (optind == argc) {
     // TODO: think of another way to approach this
-    ctx.target_dirs = default_target_dirs;
-    ctx.target_dirs_length = 1;
+    cstr_array_from(&ctx.target_dirs, default_target_dirs, 1);
   } else {
     // TODO: do some research if modifying the argv is fine
-    ctx.target_dirs_length = argc - optind;
-    ctx.target_dirs = argv + optind;
+    cstr_array_from(&ctx.target_dirs, argv + optind, argc - optind);
   }
 }
 
 void cleanup() {
-  int i;
   close_cache_stream();
   cstr_array_free_data(&ctx.invalid_files);
   cstr_array_free_data(&ctx.valid_files);
-  for (i = 0; i < ctx.target_dirs_length; i += 1) {
-    free(ctx.target_dirs[i]);
-  }
+  cstr_array_loop(&ctx.target_dirs, dir, {
+      free(dir);
+    });
 }
 
 void set_file_mtime(const char *filepath, const struct timespec mtime) {
@@ -373,13 +392,52 @@ int process_entry(
   return 0;
 }
 
-int walk_tree(char *dirpath) {
-  ctx.current_dir = dirpath;
-  ctx.current_dir_len = strnlen(dirpath, ctx.PATH_LEN_MAX);
+void walk_tree(char *dirpath) {
+  Cstr_array directories;
+  Cstr_array files;
+  DIR *dir;
+  struct dirent *entry;
+  char *path_buffer = cmalloc(ctx.PATH_LEN_MAX + 1);
+  char *base_offset;
 
-  printf("%s:\n", dirpath);
-  ERROR_NO(nftw(dirpath, process_entry, -1, 0) == -1, "nftw(%s)", dirpath);
-  return 0;
+  *path_buffer = '\0';
+  base_offset = stpcpy(path_buffer, dirpath);
+  base_offset = stpcpy(base_offset, "/");
+
+  cstr_array_free_data(&directories);
+  cstr_array_free_data(&files);
+
+  ERROR_NO((dir = opendir(dirpath)) == NULL, "opendir(%s)", dirpath);
+  errno = 0;
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+      continue;
+    }
+    stpcpy(base_offset, entry->d_name);
+    if (entry->d_type == DT_DIR) {
+      cstr_array_append(&directories, path_buffer);
+    } else if (entry->d_type == DT_REG) {
+      cstr_array_append(&files, path_buffer);
+    }
+    *base_offset = '\0';
+  }
+  ERROR_NO(errno != 0, "readdir(%s)", dirpath);
+
+  cstr_array_sort(&directories);
+  cstr_array_sort(&files);
+
+  printf("Directories\n");
+  cstr_array_loop(&directories, dir, {
+      printf("> %s\n", dir);
+    });
+  printf("Files\n");
+  cstr_array_loop(&files, file, {
+      printf("> %s\n", file);
+    });
+
+  closedir(dir);
+  cstr_array_free_data(&directories);
+  cstr_array_free_data(&files);
 }
 
 #ifdef CCHECK_TEST
@@ -389,14 +447,12 @@ int main(int argc, char **argv) {
 #endif
   FILE *stream;
   char *line, *resolved_path;
-  int i;
   size_t linesz;
 
   memset(&ctx, 0, sizeof(Context)); // just to be sure that ctx data is set to zeros
 
   assert(argc > 0);
-  ctx.binary_mtime = get_file_mtime(argv[0]);
-  ctx.most_recent_mtime = ctx.binary_mtime;
+  ctx.binary_mtime = get_file_mtime(argv[0]); ctx.most_recent_mtime = ctx.binary_mtime;
   ctx.tab_width = 2;
 
   path_conf(ctx.NAME_LEN_MAX, _PC_NAME_MAX);
@@ -405,14 +461,13 @@ int main(int argc, char **argv) {
   parse_arguments(argc, argv);
 
   // change target_dirs elements to absolute path
-  for (i = 0; i < ctx.target_dirs_length; i += 1) {
-    resolved_path = cmalloc(ctx.PATH_LEN_MAX + 1);
+  cstr_array_loop(&ctx.target_dirs, dir, {
+      resolved_path = cmalloc(ctx.PATH_LEN_MAX + 1);
+      ERROR_NO(realpath(dir, resolved_path) == NULL, "realpath(%s)", dir);
+      *dir_p = resolved_path;
+    });
 
-    ERROR_NO(realpath(ctx.target_dirs[i], resolved_path) == NULL,
-             "realpath(%s)", ctx.target_dirs[i]);
-
-    ctx.target_dirs[i] = resolved_path;
-  }
+  cstr_array_sort(&ctx.target_dirs);
 
 #ifndef CCHECK_TEST
   if (is_file_dir_exist(CACHE_FILE)) {
@@ -435,9 +490,14 @@ int main(int argc, char **argv) {
   }
 #endif
 
-  for (i = 0; i < ctx.target_dirs_length; i += 1) {
-    walk_tree(ctx.target_dirs[i]);
-  }
+  cstr_array_loop(&ctx.target_dirs, dir, {
+      // walk_tree(dir);
+      ctx.current_dir = dir;
+      ctx.current_dir_len = strnlen(dir, ctx.PATH_LEN_MAX);
+
+      printf("%s:\n", dir);
+      ERROR_NO(nftw(dir, process_entry, -1, 0) == -1, "nftw(%s)", dir);
+    });
 
   set_file_mtime(argv[0], ctx.most_recent_mtime);
   cleanup();
