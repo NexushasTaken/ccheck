@@ -16,7 +16,7 @@
 #include <libgen.h>
 #include <ftw.h>
 #include <getopt.h>
-#include "logger.h"
+#include <error.h>
 
 typedef struct {
   char **elems;
@@ -35,7 +35,6 @@ typedef struct {
   Cstr_array invalid_files;
   long NAME_LEN_MAX;
   long PATH_LEN_MAX;
-  char *ORIG_CWD;
 
   char **target_dirs;
   int target_dirs_length;
@@ -49,42 +48,66 @@ typedef struct {
 
 static Context ctx;
 
-#define MALLOC(ptr, size)                          \
-  do {                                             \
-    ptr = malloc(size);                            \
-    ASSERT_NULL(ptr, "could not allocate memory"); \
+#define error_line(status, errnum, ...) \
+  error_at_line(status, errnum, __FILE__, __LINE__, __VA_ARGS__)
+#define ERROR_NO(condition, ...)                  \
+  do {                                         \
+    if ((condition)) {                         \
+      error(EXIT_FAILURE, errno, __VA_ARGS__); \
+    }                                          \
   } while (0)
+
+#define ERROR_NO_LINE(condition, ...)          \
+  do {                                         \
+    if ((condition)) {                         \
+      error_line(EXIT_FAILURE, errno, __VA_ARGS__); \
+    }                                          \
+  } while (0)
+
+#define path_conf(var, name)                      \
+  do {                                            \
+    var = pathconf("/", name);                    \
+    ERROR_NO((var) == -1, "pathconf(%s)", #name); \
+  } while (0);
+
+#define sys_conf(var, name)                      \
+  do {                                           \
+    var = sysconf(name);                         \
+    ERROR_NO((var) == -1, "sysconf(%s)", #name); \
+  } while (0);
 
 #define is_dir(path) (S_ISDIR(get_file_mode(path)))
 #define is_reg(path) (S_ISREG(get_file_mode(path)))
 mode_t get_file_mode(const char *filepath) {
   struct stat buf;
 
-  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  ERROR_NO(stat(filepath, &buf) == -1, "stat(%s)", filepath);
   return buf.st_mode;
 }
 
 struct timespec get_file_mtime(const char *filepath) {
   struct stat buf;
 
-  ASSERT_ERR(stat(filepath, &buf), "could not stat %s", filepath);
+  ERROR_NO(stat(filepath, &buf) == -1, "stat(%s)", filepath);
   return buf.st_mtim;
 }
 
 void mkdir_if_not_exist(const char *path) {
-  int ret;
+  int err;
 
-  ret = mkdir(path, 0755);
-  if (ret < 0) {
-    if (errno == EEXIST) {
-      if (S_ISDIR(get_file_mode(path))) {
-        return;
-      } else {
-        PANIC("%s exist but it's not a directory", path);
-      }
+  err = mkdir(path, 0755);
+  if (err < 0) {
+    if (errno == EEXIST && is_dir(path)) {
+      return;
     }
-    PANIC("could not create %s directory: %s", path, strerror(errno));
+    error(EXIT_FAILURE, errno, "cannot create directory '%s'", path);
   }
+}
+
+void *cmalloc(size_t sz) {
+  void *p = malloc(sz);
+  ERROR_NO(p == NULL, "malloc(%zu)", sz);
+  return p;
 }
 
 FILE *get_cache_stream() {
@@ -97,14 +120,14 @@ FILE *get_cache_stream() {
     if (fd < 0) {
       if (errno == EEXIST) {
         fd = open(CACHE_FILE, O_RDWR);
-        ASSERT_ERR(fd, "could not open %s", CACHE_FILE);
+        ERROR_NO(fd == -1, "could not open %s", CACHE_FILE);
       } else {
-        ASSERT_ERR(fd, "could not create %s", CACHE_FILE);
+        ERROR_NO(EXIT_FAILURE, "could not create %s", CACHE_FILE);
       }
     }
 
     ctx._cache_stream = fdopen(fd, "r+");
-    ASSERT_NULL(ctx._cache_stream, "could not create a stream for file descriptor %d", fd);
+    ERROR_NO(ctx._cache_stream == NULL, "fdopen(%s)", CACHE_FILE);
   }
   return ctx._cache_stream;
 }
@@ -120,31 +143,30 @@ void close_cache_stream() {
     get_cache_stream();
   }
 
-  fd = fileno(ctx._cache_stream);
-  ASSERT_ERR(fd, "could not get the file descriptor from stream");
-  ASSERT_ERR(ftruncate(fd, 0), "could not truncate the contents of file descriptor %d", fd);
+  ERROR_NO((fd = fileno(ctx._cache_stream)) == -1, "fileno");
+  ERROR_NO(ftruncate(fd, 0) == -1, "ftruncate");
   rewind(ctx._cache_stream);
 
   if (ctx.invalid_files.count > 0) {
     for (i = 0; i < ctx.invalid_files.count; i += 1) {
       fprintf(ctx._cache_stream, "%s\n", ctx.invalid_files.elems[i]);
     }
-    fflush(ctx._cache_stream);
+    ERROR_NO_LINE(fflush(ctx._cache_stream) == EOF, "fflush");
   }
 
-  fclose(ctx._cache_stream);
+  ERROR_NO_LINE(fclose(ctx._cache_stream) == EOF, "fclose");
 }
 
 char* cstr_array_pop(Cstr_array *arr) {
-  if (arr->count == 0) {
-    PANIC("could not pop: array is empty");
-  }
+  assert(arr->count > 0);
   arr->count -= 1;
   return arr->elems[arr->count];
 }
 
 int cstr_array_contains(const Cstr_array *arr, const char *str) {
-  for (int i = 0; i < arr->count; i += 1) {
+  int i;
+
+  for (i = 0; i < arr->count; i += 1) {
     if (strncmp(str, arr->elems[i], strlen(str)) == 0) {
       return 1;
     }
@@ -153,22 +175,19 @@ int cstr_array_contains(const Cstr_array *arr, const char *str) {
 }
 
 void cstr_array_realloc(Cstr_array *arr, size_t new_size) {
+  assert(arr->capacity < new_size);
   char **new_arr;
 
-  if (arr->capacity >= new_size) {
-    PANIC("capacity %ld must be larger than %ld", arr->capacity, new_size);
-  }
-  MALLOC(new_arr, sizeof(char*) * new_size);
-  new_arr = memcpy(new_arr, arr->elems, sizeof(char*) * arr->count);
+  new_arr = cmalloc(sizeof(char*) * new_size);
+
+  memcpy(new_arr, arr->elems, sizeof(char*) * arr->count);
   free(arr->elems);
   arr->elems = new_arr;
   arr->capacity = new_size;
 }
 
 void cstr_array_remove(Cstr_array *arr, size_t index) {
-  if (index >= arr->count) {
-    PANIC("%ld is index out of bounds", index);
-  }
+  assert(index < arr->count);
   free(arr->elems[index]);
   index += 1;
   while (index < arr->count) {
@@ -181,13 +200,16 @@ void cstr_array_remove(Cstr_array *arr, size_t index) {
 void cstr_array_free_data(Cstr_array *arr) {
   int i;
 
-  if (arr->elems == NULL) {
+  if (arr == NULL) {
     return;
   }
-  for (i = 0; i < arr->count; i += 1) {
-    free(arr->elems[i]);
+
+  if (arr->elems != NULL) {
+    for (i = 0; i < arr->count; i += 1) {
+      free(arr->elems[i]);
+    }
+    free(arr->elems);
   }
-  free(arr->elems);
   memset(arr, 0, sizeof(Cstr_array));
 }
 
@@ -197,8 +219,7 @@ void cstr_array_append(Cstr_array *arr, const char *const str) {
   if (arr->count >= arr->capacity) {
     cstr_array_realloc(arr, arr->capacity > 0 ? arr->capacity * 2 : 8);
   }
-  dup = strdup(str);
-  ASSERT_NULL(dup, "could not duplicate string %s", str);
+  ERROR_NO((dup = strdup(str)) == NULL, "strdup(%s)", str);
   arr->elems[arr->count] = dup;
   arr->count += 1;
 }
@@ -219,22 +240,10 @@ int is_file_dir_exist(const char *filepath) {
     if (errno == ENOENT) {
       return 0;
     }
-    ASSERT_ERR(ret, "could not stat %s: %s", filepath, strerror(errno));
+    error(EXIT_FAILURE, errno, "stat(%s)", filepath);
   }
   return 1;
 }
-
-#define path_conf(var, name)                                      \
-  do {                                                            \
-    var = pathconf("/", name);                                    \
-    ASSERT_ERR(var, "could not get pathconf value for %d", name); \
-  } while (1);
-
-#define sys_conf(var, name)                                      \
-  do {                                                           \
-    var = sysconf(name);                                         \
-    ASSERT_ERR(var, "could not get sysconf value for %d", name); \
-  } while (1);
 
 // return status code
 int run_analyzer(const char *filepath) {
@@ -278,8 +287,7 @@ long str_to_long(const char *str) {
   if (*str != '\0' && *last == '\0') {
     return value;
   } else {
-    fprintf(stderr, "the %s value is not a valid number\n", str);
-    exit(EXIT_FAILURE);
+    error(EXIT_FAILURE, 0, "%s is not a valid number", str);
   }
   return 0;
 }
@@ -323,9 +331,9 @@ void init(int argc, char **argv) {
   int i;
   size_t linesz;
 
-  assert(argc > 0);
   memset(&ctx, 0, sizeof(Context)); // just to be sure that ctx data is set to zeros
 
+  assert(argc > 0);
   ctx.binary_mtime = get_file_mtime(argv[0]);
   ctx.most_recent_mtime = ctx.binary_mtime;
   ctx.tab_width = 2;
@@ -337,30 +345,21 @@ void init(int argc, char **argv) {
 
   // change target_dirs elements to absolute path
   for (i = 0; i < ctx.target_dirs_length; i += 1) {
-    MALLOC(resolved_path, ctx.PATH_LEN_MAX + 1);
+    resolved_path = cmalloc(ctx.PATH_LEN_MAX + 1);
 
-    if (realpath(ctx.target_dirs[i], resolved_path) == NULL) {
-      if (errno == ENOENT || errno == ENOTDIR) {
-        fprintf(stderr, "\"%s\": %s\n", ctx.target_dirs[i], strerror(ENOENT));
-        exit(EXIT_SUCCESS);
-      }
-      ASSERT_NULL(NULL, "error: %s", strerror(ENOENT));
-    }
+    ERROR_NO(realpath(ctx.target_dirs[i], resolved_path) == NULL,
+             "realpath(%s)", ctx.target_dirs[i]);
 
     ctx.target_dirs[i] = resolved_path;
   }
-
-  // remove ORIG_CWD if wasn't tend to be used
-  MALLOC(ctx.ORIG_CWD, ctx.PATH_LEN_MAX+1);
-  ASSERT_NULL(getcwd(ctx.ORIG_CWD, ctx.PATH_LEN_MAX), "could not get current working directory");
 
 #ifndef CCHECK_TEST
   if (is_file_dir_exist(CACHE_FILE)) {
     stream = get_cache_stream();
 
-    MALLOC(line, ctx.PATH_LEN_MAX+1);
+    line = cmalloc(ctx.PATH_LEN_MAX + 1);
     *line = 0;
-    errno = 0; // does errors even occured when fgets are used?
+    errno = 0; // TODO: does errors even occured when fgets are used?
     while (fgets(line, ctx.PATH_LEN_MAX+1, stream) != NULL) {
       linesz = strnlen(line, ctx.PATH_LEN_MAX);
       if (line[linesz - 1] == '\n') {
@@ -384,7 +383,6 @@ void cleanup() {
   for (i = 0; i < ctx.target_dirs_length; i += 1) {
     free(ctx.target_dirs[i]);
   }
-  free(ctx.ORIG_CWD);
 }
 
 void set_file_mtime(const char *filepath, const struct timespec mtime) {
@@ -392,14 +390,14 @@ void set_file_mtime(const char *filepath, const struct timespec mtime) {
   struct stat statbuf;
   int file_fd;
 
-  ASSERT_ERR((file_fd = open(filepath, O_RDONLY)), "could not open %s", filepath);
-  ASSERT_ERR(fstat(file_fd, &statbuf), "could not stat %s", filepath);
+  ERROR_NO((file_fd = open(filepath, O_RDONLY)) == -1, "open(%s)", filepath);
+  ERROR_NO(fstat(file_fd, &statbuf) == -1, "fstat(%s)", filepath);
 
   ts[0] = statbuf.st_atim;
   ts[1] = mtime;
 
-  ASSERT_ERR(futimens(file_fd, ts), "could not change the timestamp of %s", filepath);
-  ASSERT_ERR(close(file_fd), "could not file descriptor %d", file_fd);
+  ERROR_NO(futimens(file_fd, ts) == -1, "futimens(%s)", filepath);
+  ERROR_NO(close(file_fd) == -1, "close(%s)", filepath);
 }
 
 int process_entry(
@@ -430,7 +428,7 @@ int walk_tree(char *dirpath) {
   ctx.current_dir_len = strnlen(dirpath, ctx.PATH_LEN_MAX);
 
   printf("%s:\n", dirpath);
-  ASSERT_ERR(nftw(dirpath, process_entry, -1, 0), "could not traverse %s directory", dirpath);
+  ERROR_NO(nftw(dirpath, process_entry, -1, 0) == -1, "nftw(%s)", dirpath);
   return 0;
 }
 

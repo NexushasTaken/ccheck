@@ -6,13 +6,12 @@ project('C/C++ Check', 'c',
 
 sources = [
   'src/main.c',
-  'src/logger.c',
 ]
 executable('ccheck', sources)
 
 cmocka = dependency('cmocka')
 unit_tests = {
-  'cstr' : ['tests/cstr.c', 'src/logger.c'],
+  'cstr' : ['tests/cstr.c'],
   }
 foreach name, srcs : unit_tests
   exe = executable(name, srcs,
